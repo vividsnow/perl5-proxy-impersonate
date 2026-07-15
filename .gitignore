@@ -1,0 +1,11 @@
+/blib/
+/Makefile
+/Makefile.old
+/MYMETA.*
+/pm_to_blib
+*.o
+*.bs
+.tmp/
+/META.yml
+/META.json
+/Proxy-Impersonate-*.tar.gz

@@ -1,0 +1,64 @@
+name: ci
+on: [push, pull_request]
+
+# Two jobs, deliberately.
+#
+# `unit` needs no curl-impersonate toolchain at all: the cert, HTTP-codec,
+# connection state-machine and on_request tests load the submodules directly, so
+# a Perl-level regression reports in about a minute instead of after a
+# multi-minute source build. `full` then installs the real chain (the Alien
+# builds libcurl-impersonate, BoringSSL and friends from source) and runs
+# everything, including the parts that construct a live proxy.
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cpanminus build-essential libssl-dev
+          # cpanm falls back to ~/perl5 (not in @INC) when it cannot write to the
+          # runner's perl, and still exits 0 -- so put it on PERL5LIB or nothing
+          # finds what was just installed.
+          export PERL5LIB="$HOME/perl5/lib/perl5${PERL5LIB:+:$PERL5LIB}"
+          echo "PERL5LIB=$PERL5LIB" >> "$GITHUB_ENV"
+          cpanm --notest EV Net::SSLeay
+      - name: test (no curl toolchain needed)
+        run: |
+          perl Makefile.PL
+          make
+          # Curl::Impersonate is absent here, so Proxy::Impersonate itself will
+          # not load; these files exercise the submodules that do not need it.
+          prove -Ilib -b t/10-cert.t t/20-http.t t/30-connection.t \
+                          t/31-on-request.t t/43-ssl-moving-buffer.t
+
+  full:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cpanminus git ninja-build cmake pkg-config ca-certificates \
+            curl golang-go patch bzip2 xz-utils unzip \
+            build-essential libssl-dev
+      - name: cpan deps (builds libcurl-impersonate from source)
+        run: |
+          export PERL5LIB="$HOME/perl5/lib/perl5${PERL5LIB:+:$PERL5LIB}"
+          echo "PERL5LIB=$PERL5LIB" >> "$GITHUB_ENV"
+          # Curl::Impersonate pulls the Alien in itself; installing it is what
+          # takes the time, since the Alien compiles libcurl-impersonate,
+          # BoringSSL and friends from source.
+          cpanm --notest EV Net::SSLeay Curl::Impersonate
+          cpanm --notest --installdeps .
+      - name: test
+        env:
+          PROXY_IT: 1          # the integration tests are entirely local
+        run: |
+          perl Makefile.PL
+          make
+          make test
