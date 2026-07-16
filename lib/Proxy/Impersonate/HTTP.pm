@@ -28,10 +28,13 @@ my %FORWARD = map { $_ => 1 } qw(
 # languages in a non-Chrome format (comma-space, lower-cased region), a tell next
 # to a Chrome JA4. It is supplied as an identity header (override_headers) in the
 # exact Chrome format instead -- see EV::WebKit::Fingerprint::identity_headers.
-# Headers a real browser sends only on navigations / user-activated requests: if
-# WebKit did not send one, strip curl's template default (undef => "Header:") so a
-# subresource does not carry e.g. Sec-Fetch-User: ?1 or Upgrade-Insecure-Requests.
-my %CONDITIONAL = map { $_ => 1 } qw(sec-fetch-user upgrade-insecure-requests);
+# Headers a real browser sends only on a USER-ACTIVATED navigation: if WebKit did
+# not send one, strip curl's template default (undef => "Header:") so a subresource
+# (or an automated navigation) does not carry e.g. Sec-Fetch-User: ?1. NB
+# Upgrade-Insecure-Requests is NOT here -- it is not user-gated (Chrome sends it on
+# every navigation) and WebKit never emits it, so it is synthesized per target +
+# destination in coherent_headers, not merely stripped.
+my %CONDITIONAL = map { $_ => 1 } qw(sec-fetch-user);
 # Chrome's per-destination Accept for the browser-FLAVORED destinations. NOT
 # forwarded from WebKit for these (whose Accept is Safari-flavored -- a Chrome/JA4
 # request with a Safari Accept is a tell) and NOT left as curl's static document
@@ -101,6 +104,11 @@ sub coherent_headers {
         elsif ($CONDITIONAL{$k}) { $out{$k} = $_->[1]; $seen{$k} = 1 }
     }
     $out{$_} = undef for grep { !$seen{$_} } keys %CONDITIONAL;
+    # Upgrade-Insecure-Requests: real Chrome sends "1" on every navigation
+    # (document/iframe/frame) and nothing on a subresource; Safari sends it on
+    # neither; WebKit emits it never. So strip curl's static template UIR by default
+    # and synthesize "1" only for a Chrome-target navigation (below).
+    $out{'upgrade-insecure-requests'} = undef;
     # Accept, target-family-aware. For a CHROME target WebKit's own Accept is
     # Safari-flavored (a tell next to a Chrome JA4), so synthesize Chrome's per-
     # destination value (%CHROME_ACCEPT); for an unmapped dest that carried an
@@ -112,8 +120,10 @@ sub coherent_headers {
     # Only acts when the request carried Sec-Fetch-Dest (a real WebKit request);
     # otherwise curl's template Accept stands.
     if (defined $dest) {
+        my $d = lc $dest;
+        $out{'upgrade-insecure-requests'} = '1'
+            if $chrome && ($d eq 'document' || $d eq 'iframe' || $d eq 'frame');
         if ($chrome) {
-            my $d = lc $dest;
             $out{accept} = exists $CHROME_ACCEPT{$d} ? $CHROME_ACCEPT{$d}
                          : defined $req_accept        ? $req_accept
                          :                              '*/*';

@@ -53,15 +53,16 @@ is(response_head(502, {}), "HTTP/1.1 502 Bad Gateway\r\n\r\n", '502 with no head
     ok(!defined $sub->{'upgrade-insecure-requests'}, 'UIR marked for removal on a subresource');
     ok(!exists $sub->{'user-agent'}, 'User-Agent still dropped (identity via override_headers)');
 }
-# a Chrome navigation keeps Sec-Fetch-User / UIR + gets the Chrome document Accept
+# a Chrome navigation: Sec-Fetch-User forwarded (WebKit sent it), UIR SYNTHESIZED
+# (WebKit never sends it, but real Chrome sends it on every navigation), Chrome Accept
 {
     my $nav = coherent_headers([
         ['Sec-Fetch-Mode','navigate'], ['Sec-Fetch-Dest','document'],
-        ['Sec-Fetch-User','?1'], ['Upgrade-Insecure-Requests','1'],
+        ['Sec-Fetch-User','?1'],
         ['Accept','text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'],  # WebKit/Safari flavor
     ], 1);
     is($nav->{'sec-fetch-user'}, '?1', 'Sec-Fetch-User forwarded on a navigation');
-    is($nav->{'upgrade-insecure-requests'}, '1', 'UIR forwarded on a navigation');
+    is($nav->{'upgrade-insecure-requests'}, '1', 'UIR synthesized on a Chrome navigation (WebKit never sends it)');
     like($nav->{accept}, qr/image\/avif.*application\/signed-exchange/,
          'document Accept synthesized to Chrome (not the forwarded Safari value)');
     unlike($nav->{accept}, qr/^text\/html,application\/xhtml\+xml,application\/xml;q=0\.9,\*\/\*/,
@@ -101,6 +102,21 @@ is(response_head(502, {}), "HTTP/1.1 502 Bad Gateway\r\n\r\n", '502 with no head
            'safari target does NOT inject Chrome-only Accept tokens (avif/signed-exchange)');
     my $img = coherent_headers([['Sec-Fetch-Dest','image'], ['Accept','image/png,image/svg+xml,*/*;q=0.8']], 0);
     is($img->{accept}, 'image/png,image/svg+xml,*/*;q=0.8', 'safari target forwards WebKit image Accept (not Chrome image Accept)');
+    ok(!defined $doc->{'upgrade-insecure-requests'}, 'a Safari navigation gets NO Upgrade-Insecure-Requests');
+}
+# Upgrade-Insecure-Requests: synthesized only for a Chrome navigation (Chrome sends
+# it on every navigation; nothing on subresources; Safari sends it never)
+{
+    is(coherent_headers([['Sec-Fetch-Dest','document']], 1)->{'upgrade-insecure-requests'}, '1',
+       'Chrome document navigation -> UIR 1 (synthesized)');
+    is(coherent_headers([['Sec-Fetch-Dest','iframe']], 1)->{'upgrade-insecure-requests'}, '1',
+       'Chrome iframe navigation -> UIR 1');
+    ok(!defined coherent_headers([['Sec-Fetch-Dest','image']], 1)->{'upgrade-insecure-requests'},
+       'Chrome subresource (image) -> no UIR');
+    ok(!defined coherent_headers([['Sec-Fetch-Dest','empty']], 1)->{'upgrade-insecure-requests'},
+       'Chrome fetch/xhr (empty) -> no UIR');
+    ok(!defined coherent_headers([['Sec-Fetch-Dest','document']], 0)->{'upgrade-insecure-requests'},
+       'Safari document navigation -> no UIR');
 }
 # Accept-Language is NOT forwarded (supplied as an identity header in Chrome format)
 {

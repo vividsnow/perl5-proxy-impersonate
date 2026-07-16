@@ -99,9 +99,15 @@ sub _process {
             # idle timeout. Fail fast and honestly rather than a 120s hang.
             return $self->_close if length $self->{rbuf};
             $self->{connect_host} = $r->{target};      # full authority host:port (curl strips :443)
-            $self->_write_raw("HTTP/1.1 200 Connection established\r\n\r\n");
             $self->{state} = 'tls';
-            $self->_begin_tls if $self->{cert};        # (test passes cert=>undef)
+            $self->_write_raw("HTTP/1.1 200 Connection established\r\n\r\n");
+            # Begin TLS only once the 200 -- plus any pre-TLS plaintext still queued
+            # from a prior pipelined response to a slow client -- has flushed.
+            # Otherwise _begin_tls flips state to handshake, _writable routes to the
+            # handshake (not _flush), and the queued 200 is stranded. _flush resumes
+            # this via _tls_pending when wbuf drains to empty.
+            if (length $self->{wbuf}) { $self->{_tls_pending} = 1 }
+            elsif ($self->{cert})     { $self->_begin_tls }   # (test passes cert=>undef)
             return;
         }
         my ($mode, $len) = body_length($r->{headers});
@@ -316,6 +322,9 @@ sub _flush {
     $self->_touch;                                          # wrote bytes to the client -> progress
     if (length $self->{wbuf}) { return $self->_arm_write }   # partial; finish later
     $self->_disarm_write;
+    # pre-TLS plaintext (the CONNECT 200, possibly behind a prior response tail) has
+    # now fully flushed -> it is safe to start the handshake (deferred from CONNECT)
+    if (delete $self->{_tls_pending} && $self->{cert}) { return $self->_begin_tls }
     if ($self->{paused}) {                                   # room again -> resume upstream
         $self->{paused} = 0;
         $self->{multi}->resume($self->{inflight}) if $self->{inflight};

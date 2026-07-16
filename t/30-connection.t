@@ -1,6 +1,7 @@
 use v5.10; use strict; use warnings;
 use Test::More;
 use Socket;
+use Fcntl qw(F_GETFL F_SETFL O_NONBLOCK);
 use Proxy::Impersonate::Connection;
 
 # Fake Multi: capture add_streaming calls; no-op resume/remove.
@@ -95,6 +96,30 @@ use Proxy::Impersonate::Connection;
     is($h->{'user-agent'}, 'WinChrome/131', 'override replaces the UA');
     is($h->{'sec-ch-ua-platform'}, '"Windows"', 'override injects the platform client-hint');
     is($h->{cookie}, 'a=b', 'non-overridden request headers still forwarded');
+}
+
+# --- deferred TLS: when pre-TLS plaintext (e.g. a slow-client response tail) is
+#     still queued at CONNECT time, the handshake starts only after _flush drains
+#     it, not immediately -- else the handshake state strands the queued 200 ---
+SKIP: {
+    skip 'needs Net::SSLeay for a real cert', 3
+        unless eval { require Net::SSLeay; require Proxy::Impersonate::Cert; require File::Temp; 1 };
+    my $cert = Proxy::Impersonate::Cert->new(cert_dir => File::Temp::tempdir(CLEANUP => 1));
+    socketpair(my $client, my $srv, AF_UNIX, SOCK_STREAM, PF_UNSPEC) or die "socketpair: $!";
+    fcntl($srv, F_SETFL, (fcntl($srv, F_GETFL, 0) | O_NONBLOCK)) or die "fcntl: $!";
+    my $conn = Proxy::Impersonate::Connection->new(
+        fd => $srv, cert => $cert, multi => FakeMulti->new,
+        make_handle => sub {}, on_close => sub {},
+    );
+    $conn->{connect_host} = 'ex.com:443';
+    $conn->{state} = 'tls';
+    $conn->{wbuf} = "HTTP/1.1 200 Connection established\r\n\r\n";
+    $conn->{_tls_pending} = 1;
+    ok(!$conn->{ctx}, 'deferred: TLS not started while pre-TLS plaintext is queued');
+    $conn->_flush;   # drains wbuf to the peer -> starts the deferred handshake
+    ok($conn->{ctx}, 'deferred TLS handshake starts once the pre-TLS plaintext flushes');
+    ok(!$conn->{_tls_pending}, '_tls_pending cleared after the handshake begins');
+    $conn->_close;
 }
 
 done_testing;

@@ -1,6 +1,15 @@
 Revision history for Proxy-Impersonate
 
 0.03  2026-07-16
+    - Chrome navigations now carry Upgrade-Insecure-Requests: 1. Real Chrome sends
+      it on every navigation (not user-gesture-gated) but WebKit never emits it, so
+      it is synthesized per target + destination: a Chrome-target document / iframe
+      / frame request gets it; subresources and Safari targets do not (matching each
+      real browser). Previously it was stripped like a user-gated header -- a
+      conspicuous gap next to an otherwise-perfect Chrome request.
+    - A CONNECT arriving while pre-TLS plaintext is still queued (a prior pipelined
+      response to a slow client) defers the TLS handshake until that has flushed, so
+      the 200 is not stranded behind it by the handshake state.
     - A CONNECT that coalesces an optimistic ClientHello (TLS bytes in the same
       segment as the CONNECT request, before our 200) is now closed immediately
       instead of stalling until the idle timeout: set_fd binds OpenSSL to the
