@@ -176,7 +176,10 @@ fingerprint therefore matches the impersonated browser, not WebKit.
 
 It is an HTTP client, not a browser: it reproduces the B<connection>
 fingerprint only. HTTP/3 and WebSockets are out of scope in this release, as are
-streaming request uploads.
+streaming request uploads. A CONNECT client must wait for the C<200> response
+before beginning its TLS handshake: a ClientHello optimistically coalesced into
+the CONNECT segment is not supported (the connection is closed rather than left
+to stall). Browsers and libsoup -- the intended clients -- already do this.
 
 B<Header-order ceiling:> curl-impersonate reproduces the target's TLS (JA3/JA4)
 and HTTP/2 (Akamai) fingerprints exactly, and template headers keep their

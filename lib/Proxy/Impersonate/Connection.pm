@@ -91,6 +91,13 @@ sub _process {
         return $self->_close unless $r;                # malformed
         if ($self->{state} eq 'plain' && $r->{method} eq 'CONNECT') {
             substr($self->{rbuf}, 0, $end + 4, '');    # consume head
+            # A compliant client waits for our 200 before starting TLS, so nothing
+            # follows the CONNECT head yet. If a client optimistically COALESCED its
+            # ClientHello into this segment, those bytes are now stranded in rbuf --
+            # _begin_tls binds OpenSSL to the socket (set_fd), so a buffered
+            # ClientHello is invisible to the handshake and it would stall until the
+            # idle timeout. Fail fast and honestly rather than a 120s hang.
+            return $self->_close if length $self->{rbuf};
             $self->{connect_host} = $r->{target};      # full authority host:port (curl strips :443)
             $self->_write_raw("HTTP/1.1 200 Connection established\r\n\r\n");
             $self->{state} = 'tls';

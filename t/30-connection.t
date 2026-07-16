@@ -27,6 +27,23 @@ use Proxy::Impersonate::Connection;
     like($reply, qr!\AHTTP/1\.1 200 Connection established\r\n\r\n!, 'CONNECT gets a 200 established reply');
 }
 
+# --- a CONNECT that COALESCES an optimistic ClientHello (bytes after the head) is
+#     closed, not left to stall: set_fd cannot see TLS bytes already buffered in rbuf ---
+{
+    socketpair(my $client, my $srv, AF_UNIX, SOCK_STREAM, PF_UNSPEC) or die "socketpair: $!";
+    my $closed = 0;
+    my $conn = Proxy::Impersonate::Connection->new(
+        fd => $srv, cert => undef, multi => FakeMulti->new,
+        make_handle => sub { bless {}, 'FakeHandle' }, on_close => sub { $closed = 1 },
+    );
+    # CONNECT head immediately followed by (pretend) TLS ClientHello record bytes
+    $conn->{rbuf} = "CONNECT ex.com:443 HTTP/1.1\r\nHost: ex.com:443\r\n\r\n\x16\x03\x01\x00\x05hello";
+    $conn->_process;
+    ok($conn->{_dead}, 'a coalesced CONNECT+ClientHello is closed (not left to stall 120s)');
+    ok($closed, 'on_close fired for the coalesced-CONNECT case');
+    isnt($conn->{state} // '', 'tls', 'did not flip to tls / start a doomed handshake');
+}
+
 # --- a tunnelled GET maps to https://<host><target> with coherent headers ---
 {
     socketpair(my $client, my $srv, AF_UNIX, SOCK_STREAM, PF_UNSPEC) or die "socketpair: $!";

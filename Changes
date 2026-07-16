@@ -1,6 +1,12 @@
 Revision history for Proxy-Impersonate
 
 0.03  2026-07-16
+    - A CONNECT that coalesces an optimistic ClientHello (TLS bytes in the same
+      segment as the CONNECT request, before our 200) is now closed immediately
+      instead of stalling until the idle timeout: set_fd binds OpenSSL to the
+      socket, so bytes already buffered in rbuf are invisible to the handshake.
+      Compliant clients (browsers, libsoup) wait for the 200 and are unaffected;
+      documented in POD.
     - Fix corrupted responses under backpressure: on_body appended a chunk and
       THEN returned CURL_WRITEFUNC_PAUSE, but libcurl treats a PAUSE return as
       "not consumed" and re-delivers the chunk on resume -- so it was written
