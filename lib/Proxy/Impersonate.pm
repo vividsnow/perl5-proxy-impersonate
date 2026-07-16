@@ -13,6 +13,11 @@ our $VERSION = '0.03';
 
 sub new {
     my ($class, %o) = @_;
+    # A client that resets mid-response makes a write raise SIGPIPE, whose default
+    # disposition terminates the process -- and since this proxy runs in-process
+    # with EV::WebKit, that would take the browser down before the graceful abort
+    # path runs. Ignore it (standard for a network server).
+    $SIG{PIPE} = 'IGNORE';
     my $target = $o{impersonate} or Carp::croak('new: impersonate target required');
     my ($host, $port) = ($o{listen} // '127.0.0.1:0') =~ /^(.+):(\d+)$/
         or Carp::croak('new: listen must be host:port');

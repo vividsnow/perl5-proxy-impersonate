@@ -46,19 +46,30 @@ is(response_head(502, {}), "HTTP/1.1 502 Bad Gateway\r\n\r\n", '502 with no head
     ]);
     is($sub->{'sec-fetch-mode'}, 'cors', 'Sec-Fetch-Mode forwarded (not curl navigate)');
     is($sub->{'sec-fetch-dest'}, 'empty', 'Sec-Fetch-Dest forwarded');
-    is($sub->{accept}, '*/*', 'Accept forwarded');
+    is($sub->{accept}, '*/*', 'Accept synthesized for empty dest (*/*)');
     ok(!defined $sub->{'sec-fetch-user'}, 'Sec-Fetch-User marked for removal on a subresource');
     ok(exists $sub->{'sec-fetch-user'}, '...as an explicit undef (curl "Header:" removal)');
     ok(!defined $sub->{'upgrade-insecure-requests'}, 'UIR marked for removal on a subresource');
     ok(!exists $sub->{'user-agent'}, 'User-Agent still dropped (identity via override_headers)');
 }
-# a navigation keeps Sec-Fetch-User / UIR that WebKit sent
+# a navigation keeps Sec-Fetch-User / UIR that WebKit sent + Chrome document Accept
 {
     my $nav = coherent_headers([
-        ['Sec-Fetch-Mode','navigate'], ['Sec-Fetch-User','?1'], ['Upgrade-Insecure-Requests','1'],
+        ['Sec-Fetch-Mode','navigate'], ['Sec-Fetch-Dest','document'],
+        ['Sec-Fetch-User','?1'], ['Upgrade-Insecure-Requests','1'],
+        ['Accept','text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'],  # WebKit/Safari flavor
     ]);
     is($nav->{'sec-fetch-user'}, '?1', 'Sec-Fetch-User forwarded on a navigation');
     is($nav->{'upgrade-insecure-requests'}, '1', 'UIR forwarded on a navigation');
+    like($nav->{accept}, qr/image\/avif.*application\/signed-exchange/,
+         'document Accept synthesized to Chrome (not the forwarded Safari value)');
+    unlike($nav->{accept}, qr/^text\/html,application\/xhtml\+xml,application\/xml;q=0\.9,\*\/\*/,
+           'the Safari-flavored WebKit Accept is NOT forwarded verbatim');
+}
+# image destination -> Chrome image Accept
+{
+    my $img = coherent_headers([['Sec-Fetch-Dest','image']]);
+    like($img->{accept}, qr{^image/avif,image/webp,image/apng}, 'image dest -> Chrome image Accept');
 }
 # response_head emits one line per value for a repeated header
 {

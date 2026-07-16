@@ -5,6 +5,15 @@ Revision history for Proxy-Impersonate
       (override curl's static navigation defaults) and strip Sec-Fetch-User /
       Upgrade-Insecure-Requests when WebKit omits them, so a subresource no longer
       looks like a document load. Requires Curl::Impersonate 0.03.
+    - Ignore SIGPIPE: a client resetting mid-response no longer terminates the
+      (in-process) proxy before the graceful abort runs.
+    - Accept is synthesized to Chrome's per-destination value from Sec-Fetch-Dest
+      (was forwarding WebKit's Safari-flavored Accept -- a Chrome/JA4 request with
+      a Safari Accept is a tell; curl's static document Accept was wrong for
+      subresources).
+    - Chunked-body 411 rejection consumes the head + latches closing (no repeated
+      411s on a partial flush); tightened SSL want-read/write watcher handling.
+    - The Accept-CH host map is capped to bound memory on a long-running proxy.
     - high_entropy_headers => : high-entropy client hints (Sec-CH-UA-Platform-
       Version/Arch/Bitness/Model/Full-Version-List) are added per-host only after
       that host sends Accept-CH, matching real Chrome (and the JS ua_data).

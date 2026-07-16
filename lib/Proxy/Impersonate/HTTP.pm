@@ -22,12 +22,21 @@ my %REASON = (
 # separately via override_headers.
 my %FORWARD = map { $_ => 1 } qw(
     cookie referer origin content-type authorization
-    sec-fetch-site sec-fetch-mode sec-fetch-dest accept accept-language
+    sec-fetch-site sec-fetch-mode sec-fetch-dest accept-language
 );
 # Headers a real browser sends only on navigations / user-activated requests: if
-# WebKit did not send one, strip curl's template default (undef => "Header;") so a
+# WebKit did not send one, strip curl's template default (undef => "Header:") so a
 # subresource does not carry e.g. Sec-Fetch-User: ?1 or Upgrade-Insecure-Requests.
 my %CONDITIONAL = map { $_ => 1 } qw(sec-fetch-user upgrade-insecure-requests);
+# Chrome's per-destination Accept. NOT forwarded from WebKit (whose Accept is
+# Safari-flavored -- a Chrome/JA4 request with a Safari Accept is a tell) and NOT
+# left as curl's static document default (wrong for subresources). Synthesized
+# from Sec-Fetch-Dest so the value is Chrome's AND matches the request context.
+my %CHROME_ACCEPT = (
+    document => 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+    image    => 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+    style    => 'text/css,*/*;q=0.1',
+);
 
 # Parse an HTTP/1.x request head. Returns undef if the head is incomplete
 # (no CRLFCRLF yet), else a hashref. headers is an ordered arrayref of [k,v]
@@ -74,13 +83,18 @@ sub body_length {
 # "remove this header from the impersonate template".
 sub coherent_headers {
     my ($pairs) = @_;
-    my (%out, %seen);
+    my (%out, %seen, $dest);
     for (@$pairs) {
         my $k = lc $_->[0];
+        $dest = $_->[1] if $k eq 'sec-fetch-dest';
         if    ($FORWARD{$k})     { $out{$k} = $_->[1] }
         elsif ($CONDITIONAL{$k}) { $out{$k} = $_->[1]; $seen{$k} = 1 }
     }
     $out{$_} = undef for grep { !$seen{$_} } keys %CONDITIONAL;
+    # Chrome's per-destination Accept (see %CHROME_ACCEPT); only when the request
+    # carried Sec-Fetch-Dest (WebKit sends it for real requests), else curl's
+    # template Accept stands.
+    $out{accept} = $CHROME_ACCEPT{ lc $dest } // '*/*' if defined $dest;
     return \%out;
 }
 

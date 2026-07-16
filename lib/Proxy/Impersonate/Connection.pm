@@ -70,7 +70,7 @@ sub _readable {
 # --- parse + dispatch whole requests from rbuf ---
 sub _process {
     my ($self) = @_;
-    while (!$self->{_dead}) {
+    while (!$self->{_dead} && !$self->{_closing}) {
         return if $self->{inflight};                   # one request at a time
         my $end = index($self->{rbuf}, "\r\n\r\n");
         return if $end < 0;                            # head incomplete
@@ -87,8 +87,11 @@ sub _process {
         my ($mode, $len) = body_length($r->{headers});
         if ($mode eq 'chunked') {
             # no chunked-request decoder (streaming uploads are out of scope); the
-            # body framing is unknown-length, so reject cleanly and close rather
-            # than drop the body and mis-parse the leftover chunk bytes.
+            # body framing is unknown-length, so reject cleanly and close. Consume
+            # the head + latch _closing so a partial 411 flush doesn't re-parse the
+            # same head (and the leftover chunk bytes) into repeated 411s.
+            substr($self->{rbuf}, 0, $end + 4, '');
+            $self->{_closing} = 1;
             my $msg = 'chunked request bodies are not supported';
             $self->_write_client(response_head(411,
                 { 'content-type' => 'text/plain', 'content-length' => length($msg),
@@ -136,6 +139,9 @@ sub _forward {
                 # learn which high-entropy hints this host wants (Accept-CH), so
                 # later requests to it carry them -- matching Chrome's behavior
                 if (defined $self->{_req_host} && (my $ach = $hdrs->{'accept-ch'})) {
+                    # bound memory on a long-running proxy: the per-host map has no
+                    # TTL, so clear it if it grows large (hints are cheaply re-learned)
+                    %{ $self->{hints} } = () if keys %{ $self->{hints} } > 4096;
                     my $h = ref $ach eq 'ARRAY' ? join(',', @$ach) : $ach;
                     for my $req (split /\s*,\s*/, lc $h) {
                         $self->{hints}{$self->{_req_host}}{$req} = 1
@@ -236,7 +242,16 @@ sub _write_client { my ($self, $d) = @_; $self->{wbuf} .= $d; $self->_flush }
 sub _fail_write {
     my ($self) = @_;
     $self->{_write_dead} = 1;
-    return if $self->{inflight};
+    $self->_disarm_write;                          # nothing more to write; don't spin
+    if ($self->{inflight}) {
+        # wake a paused upstream so on_body sees _write_dead and aborts promptly
+        # (instead of waiting for the request timeout)
+        if ($self->{paused}) {
+            $self->{paused} = 0;
+            eval { $self->{multi}->resume($self->{inflight}) };
+        }
+        return;
+    }
     $self->_close;
 }
 
@@ -249,7 +264,7 @@ sub _flush {
         if (!defined $n || $n <= 0) {
             my $e = Net::SSLeay::get_error($self->{ssl}, defined $n ? $n : -1);
             return $self->_arm_write if $e == Net::SSLeay::ERROR_WANT_WRITE();
-            return                   if $e == Net::SSLeay::ERROR_WANT_READ();  # retry on readable
+            if ($e == Net::SSLeay::ERROR_WANT_READ()) { $self->_disarm_write; return }  # retry on readable
             return $self->_fail_write;
         }
     } else {
