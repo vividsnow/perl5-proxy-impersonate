@@ -85,4 +85,10 @@ sub _spew {
     chmod $mode, $path if defined $mode;
 }
 
+sub DESTROY {
+    my ($self) = @_;
+    Net::SSLeay::X509_free($self->{cert})     if $self->{cert};
+    Net::SSLeay::EVP_PKEY_free($self->{key})  if $self->{key};   # frees the assigned RSA too
+}
+
 1;
