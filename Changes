@@ -1,6 +1,18 @@
 Revision history for Proxy-Impersonate
 
 0.03  2026-07-16
+    - Accept map covers frame navigations (Sec-Fetch-Dest: iframe/frame get the
+      Chrome document Accept, not */*); an unmapped dest that carries an app-set
+      Accept (EventSource text/event-stream, fetch application/json) forwards it
+      rather than flattening to */*.
+    - Accept-Language is no longer forwarded from WebKit (libsoup may format it
+      unlike Chrome); it is supplied as an identity header in Chrome's exact
+      format by EV::WebKit instead.
+    - IPv6-literal authorities ([::1]:443) are parsed correctly for the per-host
+      Accept-CH hints key (was truncating to a wrong key).
+    - Client idle timeout: a connection that makes no read/write progress for
+      120s is closed, reclaiming a stalled handshake / partial head / a peer that
+      stopped reading a paused download (was pinned with its watcher armed).
     - Coherence: forward WebKit's real per-request Sec-Fetch-* + Accept headers
       (override curl's static navigation defaults) and strip Sec-Fetch-User /
       Upgrade-Insecure-Requests when WebKit omits them, so a subresource no longer

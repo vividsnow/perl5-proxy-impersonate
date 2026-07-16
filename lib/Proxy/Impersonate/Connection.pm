@@ -13,6 +13,7 @@ use Proxy::Impersonate::HTTP qw(parse_request_head body_length coherent_headers 
 # is driven by the shared Curl::Impersonate::Multi (wired to EV by the daemon).
 
 my $HIWAT = 262144;   # pause upstream when this many bytes are queued to WebKit
+my $IDLE  = 120;      # close a client that makes no read/write progress for this long
 
 sub new {
     my ($class, %o) = @_;
@@ -35,6 +36,11 @@ sub start {
     my ($self) = @_;
     $self->{sock}->blocking(0);
     $self->_arm_read;
+    # Reclaim a client that stalls -- a partial head, a wedged handshake, or a peer
+    # that stops reading a paused download -- which would otherwise keep this
+    # Connection pinned in the daemon's {conns} with its read watcher armed forever.
+    # A repeating timer reset on I/O progress (_touch); fires only when truly idle.
+    $self->{idle} = EV::timer($IDLE, $IDLE, sub { $self->_close });
     return $self;
 }
 
@@ -42,10 +48,12 @@ sub start {
 sub _arm_read    { my $s = shift; $s->{io_r} ||= EV::io(fileno($s->{sock}), EV::READ,  sub { $s->_readable }) }
 sub _arm_write   { my $s = shift; $s->{io_w} ||= EV::io(fileno($s->{sock}), EV::WRITE, sub { $s->_writable }) }
 sub _disarm_write { $_[0]{io_w} = undef }
+sub _touch        { $_[0]{idle}->again if $_[0]{idle} }   # reset the idle timeout on I/O progress
 
 # --- readable: handshake, or decrypt/read into rbuf, then process ---
 sub _readable {
     my ($self) = @_;
+    $self->_touch;
     return $self->_do_handshake if $self->{state} eq 'handshake';
     if ($self->{ssl}) {
         while (1) {
@@ -117,9 +125,17 @@ sub _forward {
     my $fwd = coherent_headers($r->{headers});
     # forced identity headers (UA + low-entropy client hints) over curl's defaults
     $fwd = { %$fwd, %{ $self->{override} } };
-    # high-entropy client hints only for a host that has sent Accept-CH (as Chrome does)
-    my ($host) = ($self->{connect_host} // '') =~ /^\[?([^\]:]+)/;
-    ($host) = $url =~ m{^https?://\[?([^\]:/]+)} if !$host;
+    # high-entropy client hints only for a host that has sent Accept-CH (as Chrome
+    # does). Derive the bare host for that key: prefer the CONNECT authority (tls),
+    # else the absolute-request URL's authority (plain). Handle a bracketed IPv6
+    # literal ([::1]:443 -> ::1), not just host:port -- else distinct IPv6 origins
+    # collide under a truncated key.
+    my $auth = $self->{connect_host};
+    ($auth) = $url =~ m{^https?://([^/]+)} if !defined $auth;
+    $auth //= '';
+    my $host;
+    if    ($auth =~ /^\[([^\]]+)\]/) { $host = $1 }   # [ipv6](:port)?
+    elsif ($auth =~ /^([^:]+)/)      { $host = $1 }   # host(:port)?
     $self->{_req_host} = $host;
     if ($host && (my $want = $self->{hints}{$host})) {
         $fwd->{$_} = $self->{high_entropy}{$_}
@@ -272,6 +288,7 @@ sub _flush {
         if (!defined $n) { return $self->_arm_write if $! == EAGAIN || $! == EWOULDBLOCK; return $self->_fail_write }
     }
     substr($self->{wbuf}, 0, $n, '');
+    $self->_touch;                                          # wrote bytes to the client -> progress
     if (length $self->{wbuf}) { return $self->_arm_write }   # partial; finish later
     $self->_disarm_write;
     if ($self->{paused}) {                                   # room again -> resume upstream
@@ -285,7 +302,7 @@ sub _close {
     my ($self) = @_;
     return if $self->{_dead};
     $self->{_dead} = 1;
-    $self->{io_r} = undef; $self->{io_w} = undef;
+    $self->{io_r} = undef; $self->{io_w} = undef; $self->{idle} = undef;
     if ($self->{inflight}) { eval { $self->{multi}->remove($self->{inflight}) }; delete $self->{inflight} }
     if ($self->{ssl}) { Net::SSLeay::free($self->{ssl}); undef $self->{ssl} }
     if ($self->{ctx}) { Net::SSLeay::CTX_free($self->{ctx}); undef $self->{ctx} }

@@ -179,6 +179,13 @@ block rather than in the browser's exact positions, so a header-order-only hash
 (e.g. JA4H) will not match on requests carrying them. The dominant fingerprints
 (JA3/JA4/Akamai) are unaffected.
 
+B<Priority ceiling:> the proxy synthesizes a per-destination Accept, but the
+HTTP/2 request priority (the C<priority> header and any PRIORITY_UPDATE frames)
+comes from curl-impersonate's static template, not from the resource type. Chrome
+varies urgency per resource; the proxy does not, so a resource-priority-aware
+fingerprinter could tell subresources apart. This lives in curl-impersonate's
+protocol layer, not in a header the proxy re-writes.
+
 =head1 TRUST MODEL
 
 WebKitGTK 6.0 exposes no way to trust a custom CA (its network process honors

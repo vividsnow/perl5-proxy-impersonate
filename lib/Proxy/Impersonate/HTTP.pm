@@ -22,18 +22,27 @@ my %REASON = (
 # separately via override_headers.
 my %FORWARD = map { $_ => 1 } qw(
     cookie referer origin content-type authorization
-    sec-fetch-site sec-fetch-mode sec-fetch-dest accept-language
+    sec-fetch-site sec-fetch-mode sec-fetch-dest
 );
+# Accept-Language is NOT forwarded: WebKit/libsoup may render the profile
+# languages in a non-Chrome format (comma-space, lower-cased region), a tell next
+# to a Chrome JA4. It is supplied as an identity header (override_headers) in the
+# exact Chrome format instead -- see EV::WebKit::Fingerprint::identity_headers.
 # Headers a real browser sends only on navigations / user-activated requests: if
 # WebKit did not send one, strip curl's template default (undef => "Header:") so a
 # subresource does not carry e.g. Sec-Fetch-User: ?1 or Upgrade-Insecure-Requests.
 my %CONDITIONAL = map { $_ => 1 } qw(sec-fetch-user upgrade-insecure-requests);
-# Chrome's per-destination Accept. NOT forwarded from WebKit (whose Accept is
-# Safari-flavored -- a Chrome/JA4 request with a Safari Accept is a tell) and NOT
-# left as curl's static document default (wrong for subresources). Synthesized
-# from Sec-Fetch-Dest so the value is Chrome's AND matches the request context.
+# Chrome's per-destination Accept for the browser-FLAVORED destinations. NOT
+# forwarded from WebKit for these (whose Accept is Safari-flavored -- a Chrome/JA4
+# request with a Safari Accept is a tell) and NOT left as curl's static document
+# default (wrong for subresources). Synthesized from Sec-Fetch-Dest so the value
+# is Chrome's AND matches the request context. A frame navigation (iframe/frame)
+# uses the same Accept as a top-level document.
+my $DOC_ACCEPT = 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7';
 my %CHROME_ACCEPT = (
-    document => 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+    document => $DOC_ACCEPT,
+    iframe   => $DOC_ACCEPT,
+    frame    => $DOC_ACCEPT,
     image    => 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
     style    => 'text/css,*/*;q=0.1',
 );
@@ -83,18 +92,28 @@ sub body_length {
 # "remove this header from the impersonate template".
 sub coherent_headers {
     my ($pairs) = @_;
-    my (%out, %seen, $dest);
+    my (%out, %seen, $dest, $req_accept);
     for (@$pairs) {
         my $k = lc $_->[0];
-        $dest = $_->[1] if $k eq 'sec-fetch-dest';
+        $dest       = $_->[1] if $k eq 'sec-fetch-dest';
+        $req_accept = $_->[1] if $k eq 'accept';
         if    ($FORWARD{$k})     { $out{$k} = $_->[1] }
         elsif ($CONDITIONAL{$k}) { $out{$k} = $_->[1]; $seen{$k} = 1 }
     }
     $out{$_} = undef for grep { !$seen{$_} } keys %CONDITIONAL;
-    # Chrome's per-destination Accept (see %CHROME_ACCEPT); only when the request
-    # carried Sec-Fetch-Dest (WebKit sends it for real requests), else curl's
-    # template Accept stands.
-    $out{accept} = $CHROME_ACCEPT{ lc $dest } // '*/*' if defined $dest;
+    # Accept: Chrome's per-destination value for the flavored dests (see
+    # %CHROME_ACCEPT). For any OTHER dest that carried a request Accept -- an
+    # app-set fetch/EventSource value (application/json, text/event-stream) that is
+    # browser-agnostic and which Chrome would also send -- forward it rather than
+    # flattening to */* (a tell, and it can break strict content negotiation).
+    # Only acts when the request carried Sec-Fetch-Dest (a real WebKit request);
+    # otherwise curl's template Accept stands.
+    if (defined $dest) {
+        my $d = lc $dest;
+        $out{accept} = exists $CHROME_ACCEPT{$d} ? $CHROME_ACCEPT{$d}
+                     : defined $req_accept        ? $req_accept
+                     :                              '*/*';
+    }
     return \%out;
 }
 

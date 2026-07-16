@@ -71,6 +71,30 @@ is(response_head(502, {}), "HTTP/1.1 502 Bad Gateway\r\n\r\n", '502 with no head
     my $img = coherent_headers([['Sec-Fetch-Dest','image']]);
     like($img->{accept}, qr{^image/avif,image/webp,image/apng}, 'image dest -> Chrome image Accept');
 }
+# an iframe/frame navigation uses the SAME Accept as a top-level document (Chrome)
+{
+    my $ifr = coherent_headers([['Sec-Fetch-Dest','iframe'], ['Accept','*/*']]);
+    like($ifr->{accept}, qr/image\/avif.*application\/signed-exchange/,
+         'iframe dest -> Chrome document Accept (not the */* it carried)');
+    my $frm = coherent_headers([['Sec-Fetch-Dest','frame']]);
+    like($frm->{accept}, qr/image\/avif.*application\/signed-exchange/,
+         'frame dest -> Chrome document Accept');
+}
+# an unmapped dest carrying an app-set Accept forwards it (EventSource, fetch)
+# instead of flattening to */*, which Chrome also sends and a strict endpoint needs
+{
+    my $sse = coherent_headers([['Sec-Fetch-Dest','empty'], ['Accept','text/event-stream']]);
+    is($sse->{accept}, 'text/event-stream', 'empty dest keeps an app-set Accept (EventSource)');
+    my $json = coherent_headers([['Sec-Fetch-Dest','empty'], ['Accept','application/json']]);
+    is($json->{accept}, 'application/json', 'empty dest keeps an app-set Accept (fetch JSON)');
+    my $bare = coherent_headers([['Sec-Fetch-Dest','empty']]);
+    is($bare->{accept}, '*/*', 'empty dest with no request Accept -> */*');
+}
+# Accept-Language is NOT forwarded (supplied as an identity header in Chrome format)
+{
+    my $al = coherent_headers([['Accept-Language','en-us, en;q=0.9'], ['Sec-Fetch-Dest','document']]);
+    ok(!exists $al->{'accept-language'}, 'Accept-Language not forwarded (identity supplies Chrome format)');
+}
 # response_head emits one line per value for a repeated header
 {
     my $rh = response_head(200, { 'set-cookie' => ['a=1','b=2'], 'content-type' => 'text/html' });
