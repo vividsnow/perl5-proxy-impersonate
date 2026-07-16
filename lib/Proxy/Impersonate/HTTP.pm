@@ -12,9 +12,22 @@ my %REASON = (
     504=>'Gateway Timeout',
 );
 
-# Keep only per-request state; the impersonate template supplies identity
-# headers (User-Agent/Accept/sec-ch-ua/...) with the right order.
-my %FORWARD = map { $_ => 1 } qw(cookie referer origin content-type authorization);
+# Forward WebKit's real per-request headers so the origin sees a coherent request
+# CONTEXT, not curl-impersonate's static navigation defaults. curl's template
+# hard-codes Sec-Fetch-Mode: navigate / Sec-Fetch-Dest: document / Accept:
+# text/html on EVERY request, which makes every subresource (image/script/XHR)
+# look like a top-level document load -- a glaring tell. WebKit computes correct
+# per-request Sec-Fetch-* + Accept, so forwarding them (they override the template
+# in place) fixes it. The User-Agent/Sec-CH-UA identity headers are supplied
+# separately via override_headers.
+my %FORWARD = map { $_ => 1 } qw(
+    cookie referer origin content-type authorization
+    sec-fetch-site sec-fetch-mode sec-fetch-dest accept accept-language
+);
+# Headers a real browser sends only on navigations / user-activated requests: if
+# WebKit did not send one, strip curl's template default (undef => "Header;") so a
+# subresource does not carry e.g. Sec-Fetch-User: ?1 or Upgrade-Insecure-Requests.
+my %CONDITIONAL = map { $_ => 1 } qw(sec-fetch-user upgrade-insecure-requests);
 
 # Parse an HTTP/1.x request head. Returns undef if the head is incomplete
 # (no CRLFCRLF yet), else a hashref. headers is an ordered arrayref of [k,v]
@@ -57,23 +70,37 @@ sub body_length {
     return ('none');
 }
 
-# The subset of request headers to forward upstream, lower-cased.
+# The request headers to forward upstream, lower-cased. A value of undef means
+# "remove this header from the impersonate template".
 sub coherent_headers {
     my ($pairs) = @_;
-    my %out;
+    my (%out, %seen);
     for (@$pairs) {
         my $k = lc $_->[0];
-        $out{$k} = $_->[1] if $FORWARD{$k};
+        if    ($FORWARD{$k})     { $out{$k} = $_->[1] }
+        elsif ($CONDITIONAL{$k}) { $out{$k} = $_->[1]; $seen{$k} = 1 }
     }
+    $out{$_} = undef for grep { !$seen{$_} } keys %CONDITIONAL;
     return \%out;
 }
 
-# Serialise a response status line + headers + terminating blank line.
+# Serialise a response status line + headers + terminating blank line. A header
+# whose value is an arrayref (a repeated header, e.g. Set-Cookie) emits one line
+# per value. Control chars in names/values are stripped (response-splitting guard).
 sub response_head {
     my ($status, $headers) = @_;
     my $reason = $REASON{$status} // 'Status';
     my $out = "HTTP/1.1 $status $reason\r\n";
-    $out .= "$_: $headers->{$_}\r\n" for sort keys %$headers;
+    for my $k (sort keys %$headers) {
+        my $v = $headers->{$k};
+        next unless defined $v;
+        (my $ck = $k) =~ tr/\r\n\0//d;
+        for my $val (ref $v eq 'ARRAY' ? @$v : $v) {
+            next unless defined $val;
+            (my $cv = $val) =~ tr/\r\n\0//d;
+            $out .= "$ck: $cv\r\n";
+        }
+    }
     $out .= "\r\n";
     return $out;
 }

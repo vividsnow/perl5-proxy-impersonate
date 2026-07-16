@@ -37,4 +37,39 @@ like($head, qr/content-type: text\/html\r\n/, 'header line present');
 like($head, qr/\r\n\r\n\z/, 'ends with the blank line');
 is(response_head(502, {}), "HTTP/1.1 502 Bad Gateway\r\n\r\n", '502 with no headers');
 
+# coherence: forward WebKit's real per-request Sec-Fetch/Accept metadata
+{
+    my $sub = coherent_headers([
+        ['Host','ex.com'], ['Cookie','a=b'],
+        ['Sec-Fetch-Site','same-origin'], ['Sec-Fetch-Mode','cors'], ['Sec-Fetch-Dest','empty'],
+        ['Accept','*/*'], ['User-Agent','WebKit'],
+    ]);
+    is($sub->{'sec-fetch-mode'}, 'cors', 'Sec-Fetch-Mode forwarded (not curl navigate)');
+    is($sub->{'sec-fetch-dest'}, 'empty', 'Sec-Fetch-Dest forwarded');
+    is($sub->{accept}, '*/*', 'Accept forwarded');
+    ok(!defined $sub->{'sec-fetch-user'}, 'Sec-Fetch-User marked for removal on a subresource');
+    ok(exists $sub->{'sec-fetch-user'}, '...as an explicit undef (curl "Header:" removal)');
+    ok(!defined $sub->{'upgrade-insecure-requests'}, 'UIR marked for removal on a subresource');
+    ok(!exists $sub->{'user-agent'}, 'User-Agent still dropped (identity via override_headers)');
+}
+# a navigation keeps Sec-Fetch-User / UIR that WebKit sent
+{
+    my $nav = coherent_headers([
+        ['Sec-Fetch-Mode','navigate'], ['Sec-Fetch-User','?1'], ['Upgrade-Insecure-Requests','1'],
+    ]);
+    is($nav->{'sec-fetch-user'}, '?1', 'Sec-Fetch-User forwarded on a navigation');
+    is($nav->{'upgrade-insecure-requests'}, '1', 'UIR forwarded on a navigation');
+}
+# response_head emits one line per value for a repeated header
+{
+    my $rh = response_head(200, { 'set-cookie' => ['a=1','b=2'], 'content-type' => 'text/html' });
+    my @sc = $rh =~ /set-cookie: (\S+)/g;
+    is_deeply(\@sc, ['a=1','b=2'], 'multiple Set-Cookie lines emitted');
+}
+# response_head strips control chars (response-splitting guard)
+{
+    my $rh = response_head(200, { 'x-evil' => "ok\r\nInjected: 1" });
+    unlike($rh, qr/\r\nInjected:/, 'CRLF in an upstream header value cannot split the response');
+}
+
 done_testing;

@@ -61,6 +61,8 @@ sub _readable {
         $self->{rbuf} .= $data;
     }
     $self->_process;
+    # a prior SSL_write that wanted-read retries now that we've fed the SSL layer
+    $self->_flush if !$self->{_dead} && length $self->{wbuf};
 }
 
 # --- parse + dispatch whole requests from rbuf ---
@@ -81,6 +83,18 @@ sub _process {
             return;
         }
         my ($mode, $len) = body_length($r->{headers});
+        if ($mode eq 'chunked') {
+            # no chunked-request decoder (streaming uploads are out of scope); the
+            # body framing is unknown-length, so reject cleanly and close rather
+            # than drop the body and mis-parse the leftover chunk bytes.
+            my $msg = 'chunked request bodies are not supported';
+            $self->_write_client(response_head(411,
+                { 'content-type' => 'text/plain', 'content-length' => length($msg),
+                  'connection' => 'close' }) . $msg);
+            $self->{close_after_flush} = 1;
+            $self->{response_complete} = 1;
+            return $self->_maybe_close_after_flush;
+        }
         my $need = $end + 4 + ($mode eq 'length' ? $len : 0);
         return if $mode eq 'length' && length($self->{rbuf}) < $need;   # await body
         substr($self->{rbuf}, 0, $end + 4, '');        # consume head
@@ -121,13 +135,16 @@ sub _forward {
             },
             on_body => sub {
                 my ($chunk) = @_;
+                return 2 if $self->{_write_dead};                # client gone -> abort upstream
                 $self->_write_client($chunk);
+                return 2 if $self->{_write_dead};                # write just failed -> abort
                 if (length($self->{wbuf}) > $HIWAT) { $self->{paused} = 1; return 1 }
                 return 0;
             },
             on_done => sub {
                 my ($err) = @_;
                 delete $self->{inflight};
+                return $self->_close if $self->{_write_dead};    # client's write side died
                 if ($err && !$self->{wrote_headers}) {           # failed before any byte
                     my $msg = "upstream error: $err";
                     $self->_write_client(response_head(502,
@@ -147,7 +164,7 @@ sub _forward {
 
 sub _reset_for_next {
     my ($self) = @_;
-    delete @{$self}{qw(wrote_headers response_complete close_after_flush)};
+    delete @{$self}{qw(wrote_headers response_complete close_after_flush _write_dead)};
 }
 
 sub _maybe_close_after_flush {
@@ -171,7 +188,11 @@ sub _begin_tls {
 sub _do_handshake {
     my ($self) = @_;
     my $rc = Net::SSLeay::accept($self->{ssl});
-    if ($rc > 0) { $self->{state} = 'tls'; $self->_disarm_write; return $self->_process }
+    # On success, drain via _readable (SSL_read loop), not _process: a TLS 1.3
+    # client's Finished + first request can coalesce into one segment, leaving the
+    # request buffered inside OpenSSL where a bare _process (which only reads rbuf)
+    # would never see it -> hang.
+    if ($rc > 0) { $self->{state} = 'tls'; $self->_disarm_write; return $self->_readable }
     my $e = Net::SSLeay::get_error($self->{ssl}, $rc);
     if    ($e == Net::SSLeay::ERROR_WANT_READ())  { $self->_disarm_write }   # read watcher already armed
     elsif ($e == Net::SSLeay::ERROR_WANT_WRITE()) { $self->_arm_write }
@@ -188,21 +209,33 @@ sub _writable {
 sub _write_raw    { my ($self, $d) = @_; $self->{wbuf} .= $d; $self->_flush }   # pre-TLS plaintext
 sub _write_client { my ($self, $d) = @_; $self->{wbuf} .= $d; $self->_flush }
 
+# A fatal write to the client: never _close synchronously from here, because
+# _flush can run inside an upstream on_body/on_headers callback and _close would
+# reentrantly remove() the in-flight handle. Mark the write dead so on_body
+# aborts the transfer (curl -> on_done -> safe _close); close directly only when
+# no forward is in flight.
+sub _fail_write {
+    my ($self) = @_;
+    $self->{_write_dead} = 1;
+    return if $self->{inflight};
+    $self->_close;
+}
+
 sub _flush {
     my ($self) = @_;
-    return unless length $self->{wbuf};
+    if (!length $self->{wbuf}) { $self->_disarm_write; return }   # nothing to write; drop the watcher
     my $n;
     if ($self->{ssl}) {
         $n = Net::SSLeay::write($self->{ssl}, $self->{wbuf});
         if (!defined $n || $n <= 0) {
             my $e = Net::SSLeay::get_error($self->{ssl}, defined $n ? $n : -1);
-            return $self->_arm_write
-                if $e == Net::SSLeay::ERROR_WANT_READ() || $e == Net::SSLeay::ERROR_WANT_WRITE();
-            return $self->_close;
+            return $self->_arm_write if $e == Net::SSLeay::ERROR_WANT_WRITE();
+            return                   if $e == Net::SSLeay::ERROR_WANT_READ();  # retry on readable
+            return $self->_fail_write;
         }
     } else {
         $n = syswrite($self->{sock}, $self->{wbuf});
-        if (!defined $n) { return $self->_arm_write if $! == EAGAIN || $! == EWOULDBLOCK; return $self->_close }
+        if (!defined $n) { return $self->_arm_write if $! == EAGAIN || $! == EWOULDBLOCK; return $self->_fail_write }
     }
     substr($self->{wbuf}, 0, $n, '');
     if (length $self->{wbuf}) { return $self->_arm_write }   # partial; finish later

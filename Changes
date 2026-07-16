@@ -1,5 +1,23 @@
 Revision history for Proxy-Impersonate
 
+0.03  2026-07-16
+    - Coherence: forward WebKit's real per-request Sec-Fetch-* + Accept headers
+      (override curl's static navigation defaults) and strip Sec-Fetch-User /
+      Upgrade-Insecure-Requests when WebKit omits them, so a subresource no longer
+      looks like a document load. Requires Curl::Impersonate 0.03.
+    - Multiple Set-Cookie (and other repeated response headers) are relayed as
+      separate lines instead of collapsing to the last value.
+    - Bodyless upstream responses (204/304/HEAD) are relayed instead of hanging.
+    - Fixed a per-session leak: the curl_multi<->EV callbacks formed a reference
+      cycle that prevented curl_multi_cleanup from running (weaken the closures).
+    - Drain the SSL buffer after the handshake (a coalesced TLS 1.3 request could
+      hang); reject chunked request bodies cleanly (411) instead of corrupting the
+      next parse; a client write failure aborts the upstream via curl rather than
+      a reentrant remove; fixed SSL renegotiation want-read/write handling +
+      write-watcher busy-loop.
+    - response_head strips control chars (response-splitting guard); the CA key is
+      created 0600 via sysopen (no world-readable open->chmod window); ca_dir 0700.
+
 0.02  2026-07-16
     - Add shutdown(): in-process teardown that closes active connections and
       releases the curl_multi wiring without EV::break, for embedding the proxy

@@ -3,12 +3,13 @@ use v5.10; use strict; use warnings;
 use Carp ();
 use EV;
 use Socket;
+use Scalar::Util ();
 use File::Temp ();
 use Curl::Impersonate;
 use Proxy::Impersonate::Cert;
 use Proxy::Impersonate::Connection;
 
-our $VERSION = '0.02';
+our $VERSION = '0.03';
 
 sub new {
     my ($class, %o) = @_;
@@ -48,28 +49,37 @@ sub port     { $_[0]{port} }
 sub cert_dir { $_[0]{cert_dir} }
 
 # Drive Curl::Impersonate::Multi from the EV loop via its socket-action surface.
+# The stored callbacks close over $self and the multi; weaken both so they do NOT
+# form a reference cycle (multi -> callback -> $self -> $self->{multi} = multi)
+# that would keep the multi alive and prevent its DESTROY (curl_multi_cleanup)
+# from ever running -- a per-session leak of the handle + its upstream sockets.
 sub _wire_multi {
     my ($self) = @_;
     my $m = $self->{multi};
+    Scalar::Util::weaken(my $wself = $self);
+    Scalar::Util::weaken(my $wm    = $m);
     $m->set_socket_callback(sub {
         my ($fd, $what) = @_;
-        if ($what == 4) { delete $self->{cio}{$fd}; return }   # CURL_POLL_REMOVE
+        return unless $wself && $wm;
+        if ($what == 4) { delete $wself->{cio}{$fd}; return }  # CURL_POLL_REMOVE
         my $events = 0;
         $events |= EV::READ  if $what & 1;                     # POLL_IN
         $events |= EV::WRITE if $what & 2;                     # POLL_OUT
-        $self->{cio}{$fd} = EV::io($fd, $events, sub {
+        $wself->{cio}{$fd} = EV::io($fd, $events, sub {
             my (undef, $revents) = @_;
+            return unless $wm;
             my $ev = 0;
             $ev |= 1 if $revents & EV::READ;
             $ev |= 2 if $revents & EV::WRITE;
             $ev = 3 unless $ev;                                # fallback: try both
-            $m->socket_action($fd, $ev);
+            $wm->socket_action($fd, $ev);
         });
     });
     $m->set_timer_callback(sub {
         my ($ms) = @_;
-        if ($ms < 0) { undef $self->{ctimer}; return }
-        $self->{ctimer} = EV::timer($ms / 1000, 0, sub { $m->socket_action(-1, 0) });
+        return unless $wself && $wm;
+        if ($ms < 0) { undef $wself->{ctimer}; return }
+        $wself->{ctimer} = EV::timer($ms / 1000, 0, sub { $wm->socket_action(-1, 0) if $wm });
     });
 }
 

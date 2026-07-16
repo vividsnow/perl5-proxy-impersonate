@@ -1,6 +1,7 @@
 package Proxy::Impersonate::Cert;
 use v5.10; use strict; use warnings;
 use Carp ();
+use Fcntl qw(O_CREAT O_WRONLY O_TRUNC);
 use Net::SSLeay ();
 
 BEGIN { Net::SSLeay::initialize() }
@@ -13,7 +14,7 @@ BEGIN { Net::SSLeay::initialize() }
 sub new {
     my ($class, %o) = @_;
     my $dir = $o{cert_dir} or Carp::croak('Cert: cert_dir required');
-    -d $dir or mkdir $dir or Carp::croak("Cert: mkdir $dir: $!");
+    -d $dir or mkdir $dir, 0700 or Carp::croak("Cert: mkdir $dir: $!");
     my $self = bless { dir => $dir }, $class;
     $self->_load_or_generate;
     return $self;
@@ -80,9 +81,13 @@ sub apply_to_ctx {
 
 sub _spew {
     my ($path, $data, $mode) = @_;
-    open my $fh, '>', $path or Carp::croak("Cert: write $path: $!");
+    $mode //= 0644;
+    # create at the target mode so the private key never exists world-readable
+    # in an open->chmod window
+    sysopen(my $fh, $path, O_CREAT | O_WRONLY | O_TRUNC, $mode)
+        or Carp::croak("Cert: write $path: $!");
     print $fh $data; close $fh;
-    chmod $mode, $path if defined $mode;
+    chmod $mode, $path;   # exact perms even if the file pre-existed
 }
 
 sub DESTROY {

@@ -7,6 +7,6 @@ WriteMakefile(
     AUTHOR           => 'vividsnow',
     LICENSE          => 'perl_5',
     MIN_PERL_VERSION => '5.010',
-    PREREQ_PM        => { 'EV' => 0, 'Net::SSLeay' => '1.85', 'Curl::Impersonate' => '0.02' },
+    PREREQ_PM        => { 'EV' => 0, 'Net::SSLeay' => '1.85', 'Curl::Impersonate' => '0.03' },
     TEST_REQUIRES    => { 'Test::More' => 0 },
 );
