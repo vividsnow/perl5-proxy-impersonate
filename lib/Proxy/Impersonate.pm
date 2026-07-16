@@ -8,7 +8,7 @@ use Curl::Impersonate;
 use Proxy::Impersonate::Cert;
 use Proxy::Impersonate::Connection;
 
-our $VERSION = '0.01';
+our $VERSION = '0.02';
 
 sub new {
     my ($class, %o) = @_;
@@ -96,6 +96,21 @@ sub _accept {
 
 sub run  { EV::run }
 sub stop { my ($self) = @_; undef $self->{aw}; EV::break(EV::BREAK_ALL) }
+
+# In-process teardown: stop accepting, close active connections, release the
+# curl_multi wiring. Unlike stop(), does NOT EV::break -- the caller's shared
+# loop keeps running (e.g. EV::WebKit's browser loop).
+sub shutdown {
+    my ($self) = @_;
+    undef $self->{aw};
+    my @conns = values %{ $self->{conns} || {} };   # snapshot: _close mutates {conns} via on_close
+    $self->{conns} = {};
+    for my $c (@conns) { eval { $c->_close } }
+    $self->{cio} = {};
+    undef $self->{ctimer};
+    undef $self->{multi};
+    return $self;
+}
 
 1;
 

@@ -1,5 +1,10 @@
 Revision history for Proxy-Impersonate
 
+0.02  2026-07-16
+    - Add shutdown(): in-process teardown that closes active connections and
+      releases the curl_multi wiring without EV::break, for embedding the proxy
+      in another EV loop (e.g. EV::WebKit).
+
 0.01  2026-07-16
     - Initial release.
     - EV MITM proxy: terminates a client's TLS with a single persisted
