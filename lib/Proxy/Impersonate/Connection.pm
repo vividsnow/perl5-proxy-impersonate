@@ -14,6 +14,7 @@ use Proxy::Impersonate::HTTP qw(parse_request_head body_length coherent_headers 
 
 my $HIWAT = 262144;   # pause upstream when this many bytes are queued to WebKit
 my $IDLE  = 120;      # close a client that makes no read/write progress for this long
+my $MAXHEAD = 65536;  # reject a request head larger than this (also caps a slow-drip head)
 
 sub new {
     my ($class, %o) = @_;
@@ -22,6 +23,7 @@ sub new {
         cert        => $o{cert},          # Proxy::Impersonate::Cert
         multi       => $o{multi},         # Curl::Impersonate::Multi (shared)
         override    => $o{override} // {},# headers forced on every upstream request
+        chrome      => $o{chrome} // 0,   # is the impersonate target a Chrome family (Accept synthesis)
         high_entropy => $o{high_entropy} // {},   # high-entropy client hints (Accept-CH-gated)
         hints       => $o{hints} // {},   # shared: host -> { hint-name => 1 }
         make_handle => $o{make_handle},   # sub { Curl::Impersonate->new(...) }
@@ -81,7 +83,10 @@ sub _process {
     while (!$self->{_dead} && !$self->{_closing}) {
         return if $self->{inflight};                   # one request at a time
         my $end = index($self->{rbuf}, "\r\n\r\n");
-        return if $end < 0;                            # head incomplete
+        if ($end < 0) {                                # head incomplete: keep reading,
+            return $self->_close if length($self->{rbuf}) > $MAXHEAD;  # unless it is a runaway
+            return;                                    # (a never-terminating / slow-drip head)
+        }
         my $r = parse_request_head(substr($self->{rbuf}, 0, $end + 4));
         return $self->_close unless $r;                # malformed
         if ($self->{state} eq 'plain' && $r->{method} eq 'CONNECT') {
@@ -122,7 +127,7 @@ sub _process {
 sub _forward {
     my ($self, $r, %opt) = @_;
     my $url = $opt{absolute} ? $r->{target} : "https://$self->{connect_host}$r->{target}";
-    my $fwd = coherent_headers($r->{headers});
+    my $fwd = coherent_headers($r->{headers}, $self->{chrome});
     # forced identity headers (UA + low-entropy client hints) over curl's defaults
     $fwd = { %$fwd, %{ $self->{override} } };
     # high-entropy client hints only for a host that has sent Accept-CH (as Chrome
@@ -219,6 +224,13 @@ sub _begin_tls {
     my ($self) = @_;
     my $ctx = $self->{ctx} = Net::SSLeay::CTX_new();
     Net::SSLeay::CTX_set_options($ctx, &Net::SSLeay::OP_ALL);
+    # After SSL_write returns WANT_WRITE, an upstream on_body appends to wbuf before
+    # the retry, which can realloc (move) the Perl PV. Without this mode OpenSSL
+    # rejects a moved retry buffer with "bad write retry" (fatal) and the HTTPS
+    # response is silently truncated -- exactly the backpressure path HIWAT builds.
+    # 0x2 == SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER (fixed OpenSSL value; the pending
+    # prefix bytes are never mutated, only appended after, so the mode is safe).
+    Net::SSLeay::CTX_set_mode($ctx, 0x2);
     $self->{cert}->apply_to_ctx($ctx);
     my $ssl = $self->{ssl} = Net::SSLeay::new($ctx);
     Net::SSLeay::set_fd($ssl, fileno($self->{sock}));

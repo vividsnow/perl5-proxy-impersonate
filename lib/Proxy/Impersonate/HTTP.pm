@@ -91,7 +91,7 @@ sub body_length {
 # The request headers to forward upstream, lower-cased. A value of undef means
 # "remove this header from the impersonate template".
 sub coherent_headers {
-    my ($pairs) = @_;
+    my ($pairs, $chrome) = @_;
     my (%out, %seen, $dest, $req_accept);
     for (@$pairs) {
         my $k = lc $_->[0];
@@ -101,18 +101,24 @@ sub coherent_headers {
         elsif ($CONDITIONAL{$k}) { $out{$k} = $_->[1]; $seen{$k} = 1 }
     }
     $out{$_} = undef for grep { !$seen{$_} } keys %CONDITIONAL;
-    # Accept: Chrome's per-destination value for the flavored dests (see
-    # %CHROME_ACCEPT). For any OTHER dest that carried a request Accept -- an
-    # app-set fetch/EventSource value (application/json, text/event-stream) that is
-    # browser-agnostic and which Chrome would also send -- forward it rather than
-    # flattening to */* (a tell, and it can break strict content negotiation).
+    # Accept, target-family-aware. For a CHROME target WebKit's own Accept is
+    # Safari-flavored (a tell next to a Chrome JA4), so synthesize Chrome's per-
+    # destination value (%CHROME_ACCEPT); for an unmapped dest that carried an
+    # app-set Accept (EventSource text/event-stream, fetch application/json --
+    # browser-agnostic, which Chrome also sends) forward it rather than flattening
+    # to */*; else */*. For a SAFARI target WebKit IS WebKit, so its own per-
+    # request Accept is already the right family AND per-destination -> forward it
+    # unchanged (synthesizing Chrome's here would be the same tell, reversed).
     # Only acts when the request carried Sec-Fetch-Dest (a real WebKit request);
     # otherwise curl's template Accept stands.
     if (defined $dest) {
-        my $d = lc $dest;
-        $out{accept} = exists $CHROME_ACCEPT{$d} ? $CHROME_ACCEPT{$d}
-                     : defined $req_accept        ? $req_accept
-                     :                              '*/*';
+        if ($chrome) {
+            my $d = lc $dest;
+            $out{accept} = exists $CHROME_ACCEPT{$d} ? $CHROME_ACCEPT{$d}
+                         : defined $req_accept        ? $req_accept
+                         :                              '*/*';
+        }
+        elsif (defined $req_accept) { $out{accept} = $req_accept }
     }
     return \%out;
 }

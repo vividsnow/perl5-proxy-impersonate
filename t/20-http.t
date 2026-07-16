@@ -37,13 +37,14 @@ like($head, qr/content-type: text\/html\r\n/, 'header line present');
 like($head, qr/\r\n\r\n\z/, 'ends with the blank line');
 is(response_head(502, {}), "HTTP/1.1 502 Bad Gateway\r\n\r\n", '502 with no headers');
 
-# coherence: forward WebKit's real per-request Sec-Fetch/Accept metadata
+# coherence: forward WebKit's real per-request Sec-Fetch/Accept metadata.
+# The 2nd coherent_headers arg is the "chrome target" flag (Accept synthesis).
 {
     my $sub = coherent_headers([
         ['Host','ex.com'], ['Cookie','a=b'],
         ['Sec-Fetch-Site','same-origin'], ['Sec-Fetch-Mode','cors'], ['Sec-Fetch-Dest','empty'],
         ['Accept','*/*'], ['User-Agent','WebKit'],
-    ]);
+    ], 1);
     is($sub->{'sec-fetch-mode'}, 'cors', 'Sec-Fetch-Mode forwarded (not curl navigate)');
     is($sub->{'sec-fetch-dest'}, 'empty', 'Sec-Fetch-Dest forwarded');
     is($sub->{accept}, '*/*', 'Accept synthesized for empty dest (*/*)');
@@ -52,13 +53,13 @@ is(response_head(502, {}), "HTTP/1.1 502 Bad Gateway\r\n\r\n", '502 with no head
     ok(!defined $sub->{'upgrade-insecure-requests'}, 'UIR marked for removal on a subresource');
     ok(!exists $sub->{'user-agent'}, 'User-Agent still dropped (identity via override_headers)');
 }
-# a navigation keeps Sec-Fetch-User / UIR that WebKit sent + Chrome document Accept
+# a Chrome navigation keeps Sec-Fetch-User / UIR + gets the Chrome document Accept
 {
     my $nav = coherent_headers([
         ['Sec-Fetch-Mode','navigate'], ['Sec-Fetch-Dest','document'],
         ['Sec-Fetch-User','?1'], ['Upgrade-Insecure-Requests','1'],
         ['Accept','text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'],  # WebKit/Safari flavor
-    ]);
+    ], 1);
     is($nav->{'sec-fetch-user'}, '?1', 'Sec-Fetch-User forwarded on a navigation');
     is($nav->{'upgrade-insecure-requests'}, '1', 'UIR forwarded on a navigation');
     like($nav->{accept}, qr/image\/avif.*application\/signed-exchange/,
@@ -66,33 +67,44 @@ is(response_head(502, {}), "HTTP/1.1 502 Bad Gateway\r\n\r\n", '502 with no head
     unlike($nav->{accept}, qr/^text\/html,application\/xhtml\+xml,application\/xml;q=0\.9,\*\/\*/,
            'the Safari-flavored WebKit Accept is NOT forwarded verbatim');
 }
-# image destination -> Chrome image Accept
+# image destination -> Chrome image Accept (chrome target)
 {
-    my $img = coherent_headers([['Sec-Fetch-Dest','image']]);
+    my $img = coherent_headers([['Sec-Fetch-Dest','image']], 1);
     like($img->{accept}, qr{^image/avif,image/webp,image/apng}, 'image dest -> Chrome image Accept');
 }
 # an iframe/frame navigation uses the SAME Accept as a top-level document (Chrome)
 {
-    my $ifr = coherent_headers([['Sec-Fetch-Dest','iframe'], ['Accept','*/*']]);
+    my $ifr = coherent_headers([['Sec-Fetch-Dest','iframe'], ['Accept','*/*']], 1);
     like($ifr->{accept}, qr/image\/avif.*application\/signed-exchange/,
          'iframe dest -> Chrome document Accept (not the */* it carried)');
-    my $frm = coherent_headers([['Sec-Fetch-Dest','frame']]);
+    my $frm = coherent_headers([['Sec-Fetch-Dest','frame']], 1);
     like($frm->{accept}, qr/image\/avif.*application\/signed-exchange/,
          'frame dest -> Chrome document Accept');
 }
 # an unmapped dest carrying an app-set Accept forwards it (EventSource, fetch)
 # instead of flattening to */*, which Chrome also sends and a strict endpoint needs
 {
-    my $sse = coherent_headers([['Sec-Fetch-Dest','empty'], ['Accept','text/event-stream']]);
+    my $sse = coherent_headers([['Sec-Fetch-Dest','empty'], ['Accept','text/event-stream']], 1);
     is($sse->{accept}, 'text/event-stream', 'empty dest keeps an app-set Accept (EventSource)');
-    my $json = coherent_headers([['Sec-Fetch-Dest','empty'], ['Accept','application/json']]);
+    my $json = coherent_headers([['Sec-Fetch-Dest','empty'], ['Accept','application/json']], 1);
     is($json->{accept}, 'application/json', 'empty dest keeps an app-set Accept (fetch JSON)');
-    my $bare = coherent_headers([['Sec-Fetch-Dest','empty']]);
+    my $bare = coherent_headers([['Sec-Fetch-Dest','empty']], 1);
     is($bare->{accept}, '*/*', 'empty dest with no request Accept -> */*');
+}
+# a SAFARI target (chrome flag false) forwards WebKit's OWN per-dest Accept and does
+# NOT synthesize Chrome's -- a Chrome Accept next to a Safari JA4/UA is the tell.
+{
+    my $safari_accept = 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8';
+    my $doc = coherent_headers([['Sec-Fetch-Dest','document'], ['Accept',$safari_accept]], 0);
+    is($doc->{accept}, $safari_accept, 'safari target forwards WebKit document Accept verbatim');
+    unlike($doc->{accept}, qr/signed-exchange|image\/avif/,
+           'safari target does NOT inject Chrome-only Accept tokens (avif/signed-exchange)');
+    my $img = coherent_headers([['Sec-Fetch-Dest','image'], ['Accept','image/png,image/svg+xml,*/*;q=0.8']], 0);
+    is($img->{accept}, 'image/png,image/svg+xml,*/*;q=0.8', 'safari target forwards WebKit image Accept (not Chrome image Accept)');
 }
 # Accept-Language is NOT forwarded (supplied as an identity header in Chrome format)
 {
-    my $al = coherent_headers([['Accept-Language','en-us, en;q=0.9'], ['Sec-Fetch-Dest','document']]);
+    my $al = coherent_headers([['Accept-Language','en-us, en;q=0.9'], ['Sec-Fetch-Dest','document']], 1);
     ok(!exists $al->{'accept-language'}, 'Accept-Language not forwarded (identity supplies Chrome format)');
 }
 # response_head emits one line per value for a repeated header

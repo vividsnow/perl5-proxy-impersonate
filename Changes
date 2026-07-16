@@ -1,6 +1,16 @@
 Revision history for Proxy-Impersonate
 
 0.03  2026-07-16
+    - Fix truncated HTTPS responses under backpressure: set
+      SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER on the connection so an SSL_write retry
+      whose buffer moved (an on_body append reallocated the Perl PV between a
+      WANT_WRITE and the retry) no longer fails with "bad write retry".
+    - Accept is now target-family-aware: a Chrome target synthesizes Chrome's per-
+      destination Accept, but a Safari target (safari18_0*) forwards WebKit's own
+      (Safari-correct) Accept instead of injecting Chrome-only tokens
+      (application/signed-exchange, image/avif) next to a Safari JA4/UA.
+    - Cap the request head at 64 KiB (close a never-terminating / slow-drip header
+      section the idle timer would not reclaim).
     - Accept map covers frame navigations (Sec-Fetch-Dest: iframe/frame get the
       Chrome document Accept, not */*); an unmapped dest that carries an app-set
       Accept (EventSource text/event-stream, fetch application/json) forwards it
