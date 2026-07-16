@@ -171,6 +171,14 @@ It is an HTTP client, not a browser: it reproduces the B<connection>
 fingerprint only. HTTP/3 and WebSockets are out of scope in this release, as are
 streaming request uploads.
 
+B<Header-order ceiling:> curl-impersonate reproduces the target's TLS (JA3/JA4)
+and HTTP/2 (Akamai) fingerprints exactly, and template headers keep their
+positions. But headers the proxy adds that are not in the template (Cookie,
+Referer, and the high-entropy Sec-CH-UA hints) are appended after the template
+block rather than in the browser's exact positions, so a header-order-only hash
+(e.g. JA4H) will not match on requests carrying them. The dominant fingerprints
+(JA3/JA4/Akamai) are unaffected.
+
 =head1 TRUST MODEL
 
 WebKitGTK 6.0 exposes no way to trust a custom CA (its network process honors
