@@ -8,6 +8,8 @@
 
 **Tech Stack:** Perl 5.10+, EV, Net::SSLeay (TLS termination + cert minting), Curl::Impersonate (sub-project 1). Pure-Perl dist (no XS of its own).
 
+> **Post-spike revision (2026-07-16):** Task 1 ran and FAILED -- WebKit honors neither `SSL_CERT_FILE` nor `SSL_CERT_DIR`. Trust falls back to `set_tls_errors_policy(IGNORE)` (set by sub-project 3). Under IGNORE, the CA/per-host-leaf/bundle design is dropped for a **single persisted self-signed cert**. This **supersedes Task 3**: instead of `CA.pm`, build `Proxy::Impersonate::Cert` -- generate/load ONE persisted self-signed cert+key (`cert.pem`/`key.pem` in `cert_dir`) and `apply_to_ctx($ctx)`; interface `new(cert_dir=>$p)`, `cert_path`, `key_path`, `apply_to_ctx`. It reuses the verified `gen_key`/`mk_cert` recipe from the spike (self-signed, SAN `DNS:localhost`). Task 5 loses the SNI callback (one cert on the CTX); Task 6 uses `cert_dir` (no `ca_bundle_path`). The CA-based Task 3 below is retained for history. Tasks 2, 4, 7, 8 are unaffected.
+
 ## Global Constraints
 
 - Dist lives at `~/dev/perl-modules/Proxy-Impersonate` (git initialised; spec committed at `docs/superpowers/specs/2026-07-16-proxy-impersonate-design.md`).

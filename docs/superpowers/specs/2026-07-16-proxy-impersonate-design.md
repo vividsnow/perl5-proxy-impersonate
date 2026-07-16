@@ -1,9 +1,26 @@
 # Proxy::Impersonate -- design
 
-**Status:** approved design, pre-implementation
+**Status:** approved design; Task-1 spike done -> revised (see below)
 **Date:** 2026-07-16
 **Program:** sub-project 2 of 3 in the EV::WebKit network-fingerprint-defeat program
 (sub-project 1 `Curl::Impersonate` is DONE; sub-project 3 is the EV::WebKit wiring).
+
+## Post-spike revision (2026-07-16)
+
+The Task-1 spike proved WebKitGTK's glib-networking/GnuTLS build honors **neither**
+`SSL_CERT_FILE` **nor** `SSL_CERT_DIR`, so a root CA cannot be trusted that way.
+Trust therefore uses the pre-decided fallback: **`set_tls_errors_policy(IGNORE)`**
+on the `WebKitNetworkSession` (set by sub-project 3 on the WebKit side).
+
+Because `IGNORE` makes WebKit accept any presented cert, the CA + per-host-leaf +
+bundle machinery below is **dropped** in favour of a **single persisted
+self-signed cert** presented for every host. This supersedes the "TLS termination
+and cert minting" and "risk #1" sections wherever they describe a CA, per-host
+leaf minting, an SNI callback, `bundle.pem`, `ca_bundle_path`, or `SSL_CERT_FILE`.
+Security is unchanged: the WebKit<->proxy hop is localhost, and Curl::Impersonate
+still verifies upstream. Net::SSLeay is still used, now only to generate one
+self-signed server cert. The daemon config gains `cert_dir` (persist the cert) and
+no longer reports `ca_bundle_path`.
 
 ## Goal
 
