@@ -21,6 +21,8 @@ sub new {
         cert        => $o{cert},          # Proxy::Impersonate::Cert
         multi       => $o{multi},         # Curl::Impersonate::Multi (shared)
         override    => $o{override} // {},# headers forced on every upstream request
+        high_entropy => $o{high_entropy} // {},   # high-entropy client hints (Accept-CH-gated)
+        hints       => $o{hints} // {},   # shared: host -> { hint-name => 1 }
         make_handle => $o{make_handle},   # sub { Curl::Impersonate->new(...) }
         on_close    => $o{on_close} // sub {},
         state       => 'plain',
@@ -110,8 +112,16 @@ sub _forward {
     my ($self, $r, %opt) = @_;
     my $url = $opt{absolute} ? $r->{target} : "https://$self->{connect_host}$r->{target}";
     my $fwd = coherent_headers($r->{headers});
-    # forced identity headers (UA + client-hints) override curl's target defaults
+    # forced identity headers (UA + low-entropy client hints) over curl's defaults
     $fwd = { %$fwd, %{ $self->{override} } };
+    # high-entropy client hints only for a host that has sent Accept-CH (as Chrome does)
+    my ($host) = ($self->{connect_host} // '') =~ /^\[?([^\]:]+)/;
+    ($host) = $url =~ m{^https?://\[?([^\]:/]+)} if !$host;
+    $self->{_req_host} = $host;
+    if ($host && (my $want = $self->{hints}{$host})) {
+        $fwd->{$_} = $self->{high_entropy}{$_}
+            for grep { exists $self->{high_entropy}{$_} } keys %$want;
+    }
     my $h   = $self->{make_handle}->();
     $self->{inflight} = $h;
     $self->{wrote_headers} = 0;
@@ -123,6 +133,15 @@ sub _forward {
             on_headers => sub {
                 my ($status, $hdrs) = @_;
                 $self->{wrote_headers} = 1;
+                # learn which high-entropy hints this host wants (Accept-CH), so
+                # later requests to it carry them -- matching Chrome's behavior
+                if (defined $self->{_req_host} && (my $ach = $hdrs->{'accept-ch'})) {
+                    my $h = ref $ach eq 'ARRAY' ? join(',', @$ach) : $ach;
+                    for my $req (split /\s*,\s*/, lc $h) {
+                        $self->{hints}{$self->{_req_host}}{$req} = 1
+                            if exists $self->{high_entropy}{$req};
+                    }
+                }
                 my %h = %$hdrs;
                 delete @h{qw(connection keep-alive transfer-encoding proxy-connection upgrade)};
                 # curl delivers a decoded body; if length is unknown, delimit the

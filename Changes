@@ -5,6 +5,9 @@ Revision history for Proxy-Impersonate
       (override curl's static navigation defaults) and strip Sec-Fetch-User /
       Upgrade-Insecure-Requests when WebKit omits them, so a subresource no longer
       looks like a document load. Requires Curl::Impersonate 0.03.
+    - high_entropy_headers => : high-entropy client hints (Sec-CH-UA-Platform-
+      Version/Arch/Bitness/Model/Full-Version-List) are added per-host only after
+      that host sends Accept-CH, matching real Chrome (and the JS ua_data).
     - Multiple Set-Cookie (and other repeated response headers) are relayed as
       separate lines instead of collapsing to the last value.
     - Bodyless upstream responses (204/304/HEAD) are relayed instead of hanging.

@@ -35,6 +35,8 @@ sub new {
         verify  => defined $o{verify} ? $o{verify} : 1,
         follow  => $o{follow_redirects} // 0,
         override => $o{override_headers} // {},   # forced on every upstream request
+        high_entropy => $o{high_entropy_headers} // {}, # added per-host after Accept-CH
+        hints    => {},                           # host -> { hint-name => 1 } (Accept-CH seen)
         multi   => Curl::Impersonate->multi,
         conns   => {},
         cio     => {},   # curl fd => EV::io watcher
@@ -91,6 +93,8 @@ sub _accept {
             cert  => $self->{cert},
             multi => $self->{multi},
             override => $self->{override},
+            high_entropy => $self->{high_entropy},
+            hints => $self->{hints},
             make_handle => sub {
                 Curl::Impersonate->new(
                     impersonate => $self->{target},
