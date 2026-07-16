@@ -33,6 +33,7 @@ sub new {
         timeout => $o{timeout} // 30,
         verify  => defined $o{verify} ? $o{verify} : 1,
         follow  => $o{follow_redirects} // 0,
+        override => $o{override_headers} // {},   # forced on every upstream request
         multi   => Curl::Impersonate->multi,
         conns   => {},
         cio     => {},   # curl fd => EV::io watcher
@@ -79,6 +80,7 @@ sub _accept {
             fd    => $cli,
             cert  => $self->{cert},
             multi => $self->{multi},
+            override => $self->{override},
             make_handle => sub {
                 Curl::Impersonate->new(
                     impersonate => $self->{target},

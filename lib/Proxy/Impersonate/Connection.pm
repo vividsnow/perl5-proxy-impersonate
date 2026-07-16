@@ -20,6 +20,7 @@ sub new {
         sock        => $o{fd},
         cert        => $o{cert},          # Proxy::Impersonate::Cert
         multi       => $o{multi},         # Curl::Impersonate::Multi (shared)
+        override    => $o{override} // {},# headers forced on every upstream request
         make_handle => $o{make_handle},   # sub { Curl::Impersonate->new(...) }
         on_close    => $o{on_close} // sub {},
         state       => 'plain',
@@ -95,6 +96,8 @@ sub _forward {
     my ($self, $r, %opt) = @_;
     my $url = $opt{absolute} ? $r->{target} : "https://$self->{connect_host}$r->{target}";
     my $fwd = coherent_headers($r->{headers});
+    # forced identity headers (UA + client-hints) override curl's target defaults
+    $fwd = { %$fwd, %{ $self->{override} } };
     my $h   = $self->{make_handle}->();
     $self->{inflight} = $h;
     $self->{wrote_headers} = 0;

@@ -62,4 +62,22 @@ use Proxy::Impersonate::Connection;
     is($fm->{calls}[0]{req}{body}, 'hello', 'request body forwarded');
 }
 
+# --- override headers are forced onto the upstream request ---
+{
+    socketpair(my $client, my $srv, AF_UNIX, SOCK_STREAM, PF_UNSPEC) or die "socketpair: $!";
+    my $fm = FakeMulti->new;
+    my $conn = Proxy::Impersonate::Connection->new(
+        fd => $srv, cert => undef, multi => $fm,
+        override => { 'user-agent' => 'WinChrome/131', 'sec-ch-ua-platform' => '"Windows"' },
+        make_handle => sub { bless {}, 'FakeHandle' }, on_close => sub {},
+    );
+    $conn->{state} = 'tls'; $conn->{connect_host} = 'ex.com';
+    $conn->{rbuf} = "GET / HTTP/1.1\r\nHost: ex.com\r\nUser-Agent: WebKit\r\nCookie: a=b\r\n\r\n";
+    $conn->_process;
+    my $h = $fm->{calls}[0]{req}{headers};
+    is($h->{'user-agent'}, 'WinChrome/131', 'override replaces the UA');
+    is($h->{'sec-ch-ua-platform'}, '"Windows"', 'override injects the platform client-hint');
+    is($h->{cookie}, 'a=b', 'non-overridden request headers still forwarded');
+}
+
 done_testing;
