@@ -21,7 +21,7 @@ use Proxy::Impersonate::Connection;
     );
     $conn->{rbuf} = "CONNECT ex.com:443 HTTP/1.1\r\nHost: ex.com:443\r\n\r\n";
     $conn->_process;
-    is($conn->{connect_host}, 'ex.com', 'CONNECT host captured');
+    is($conn->{connect_host}, 'ex.com:443', 'CONNECT authority captured (host:port)');
     is($conn->{state}, 'tls', 'state flipped to tls after CONNECT');
     sysread($client, my $reply, 128);
     like($reply, qr!\AHTTP/1\.1 200 Connection established\r\n\r\n!, 'CONNECT gets a 200 established reply');

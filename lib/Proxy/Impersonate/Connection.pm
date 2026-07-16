@@ -73,7 +73,7 @@ sub _process {
         return $self->_close unless $r;                # malformed
         if ($self->{state} eq 'plain' && $r->{method} eq 'CONNECT') {
             substr($self->{rbuf}, 0, $end + 4, '');    # consume head
-            ($self->{connect_host}) = $r->{target} =~ /^\[?([^\]:]+)/;   # host of host:port
+            $self->{connect_host} = $r->{target};      # full authority host:port (curl strips :443)
             $self->_write_raw("HTTP/1.1 200 Connection established\r\n\r\n");
             $self->{state} = 'tls';
             $self->_begin_tls if $self->{cert};        # (test passes cert=>undef)
