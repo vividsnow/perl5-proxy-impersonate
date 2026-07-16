@@ -1,0 +1,17 @@
+Revision history for Proxy-Impersonate
+
+0.01  2026-07-16
+    - Initial release.
+    - EV MITM proxy: terminates a client's TLS with a single persisted
+      self-signed cert and re-originates each request upstream through
+      Curl::Impersonate, so origins see the chosen browser's TLS (JA3/JA4) and
+      HTTP/2 (Akamai) connection fingerprint instead of the local TLS stack.
+    - HTTP and HTTPS-via-CONNECT; h1/h2 upstream; incremental response streaming
+      with backpressure (CURLPAUSE); keep-alive for fixed-length responses,
+      close-delimiting for unknown-length ones.
+    - Companion to EV::WebKit: the WebKit side accepts the proxy cert via
+      set_tls_errors_policy(IGNORE) and routes through it with set_proxy (the
+      SSL_CERT_FILE CA-trust path was spiked and does not work on WebKitGTK's
+      GnuTLS build).
+    - Not in scope this release: WebSockets, HTTP/3 upstream, streaming request
+      uploads.

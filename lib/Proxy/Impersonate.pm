@@ -98,3 +98,124 @@ sub run  { EV::run }
 sub stop { my ($self) = @_; undef $self->{aw}; EV::break(EV::BREAK_ALL) }
 
 1;
+
+__END__
+
+=head1 NAME
+
+Proxy::Impersonate -- EV MITM proxy that re-originates with a browser TLS/HTTP2 fingerprint
+
+=head1 SYNOPSIS
+
+    use EV;
+    use Proxy::Impersonate;
+
+    my $proxy = Proxy::Impersonate->new(
+        impersonate => 'chrome131',
+        listen      => '127.0.0.1:0',   # ephemeral port
+        cert_dir    => '/path/to/ca',   # persists the self-signed cert
+    );
+    printf "proxy on 127.0.0.1:%d\n", $proxy->port;
+    $proxy->run;   # EV loop
+
+A client (or EV::WebKit) uses it as an HTTP/HTTPS forward proxy. For HTTPS the
+client issues C<CONNECT host:443>; the proxy terminates that TLS with its own
+cert, then re-originates the request upstream through L<Curl::Impersonate> so the
+origin sees the chosen browser's TLS (JA3/JA4) and HTTP/2 (Akamai) fingerprint.
+
+=head1 DESCRIPTION
+
+EV::WebKit cannot present a browser's connection fingerprint itself -- WebKitGTK
+speaks GnuTLS/libsoup. This proxy sits in front of it: it MITMs WebKit's TLS on
+localhost, reads the plaintext request, and sends it upstream with a real
+browser's handshake via C<libcurl-impersonate>. The origin's TLS/HTTP2
+fingerprint therefore matches the impersonated browser, not WebKit.
+
+It is an HTTP client, not a browser: it reproduces the B<connection>
+fingerprint only. HTTP/3 and WebSockets are out of scope in this release, as are
+streaming request uploads.
+
+=head1 TRUST MODEL
+
+WebKitGTK 6.0 exposes no way to trust a custom CA (its network process honors
+neither C<SSL_CERT_FILE> nor a settable C<GTlsDatabase>; this was verified by a
+spike). So the proxy presents a single self-signed cert and the WebKit side is
+told to accept it:
+
+    # on the EV::WebKit network session (sub-project 3 wires this):
+    $session->set_tls_errors_policy('ignore');
+    $browser->set_proxy("http://127.0.0.1:" . $proxy->port);
+
+This is safe: the WebKit-to-proxy hop is localhost, and the proxy re-verifies the
+real origin certificate upstream (C<< verify => 1 >>, the default).
+
+=head1 METHODS
+
+=head2 new
+
+    my $proxy = Proxy::Impersonate->new(%opt);
+
+=over 4
+
+=item impersonate => $target
+
+Required. The L<Curl::Impersonate> target (e.g. C<'chrome131'>) applied to every
+upstream request. Keep it coherent with EV::WebKit's C<fingerprint> profile.
+
+=item listen => 'host:port'
+
+Bind address; default C<'127.0.0.1:0'> (an ephemeral port, reported by L</port>).
+
+=item cert_dir => $path
+
+Where the self-signed cert is persisted. Defaults to a temporary directory.
+
+=item timeout => $seconds
+
+Per-request upstream timeout. Default 30.
+
+=item verify => $bool
+
+Verify the real origin's certificate upstream. Default true; leave it on.
+
+=item follow_redirects => $bool
+
+Whether the upstream client follows redirects. Default false -- the browser
+handles 3xx itself, so the proxy forwards them.
+
+=back
+
+=head2 port
+
+The bound listen port (useful with C<listen =E<gt> '...:0'>).
+
+=head2 cert_dir
+
+The directory holding the self-signed cert.
+
+=head2 run
+
+Run the EV loop. Blocks until L</stop> or C<EV::break>.
+
+=head2 stop
+
+Stop accepting and break the EV loop.
+
+=head1 REQUIREMENTS
+
+L<Curl::Impersonate> 0.02 or later (streaming callbacks), L<Net::SSLeay>, L<EV>.
+
+=head1 SEE ALSO
+
+L<Curl::Impersonate>, L<EV::WebKit>
+
+=head1 AUTHOR
+
+vividsnow
+
+=head1 LICENSE
+
+This library is free software; you can redistribute it and/or modify it under
+the same terms as Perl itself.
+
+=cut
