@@ -119,6 +119,7 @@ sub coherent_headers {
                          :                              '*/*';
         }
         elsif (defined $req_accept) { $out{accept} = $req_accept }
+        else                        { $out{accept} = '*/*' }   # symmetry: never leak curl's template Accept
     }
     return \%out;
 }

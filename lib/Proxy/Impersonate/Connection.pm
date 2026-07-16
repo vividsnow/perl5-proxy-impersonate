@@ -182,9 +182,15 @@ sub _forward {
             on_body => sub {
                 my ($chunk) = @_;
                 return 2 if $self->{_write_dead};                # client gone -> abort upstream
+                # Pause BEFORE consuming when already backed up: libcurl treats a
+                # CURL_WRITEFUNC_PAUSE return as "this chunk was NOT consumed" and
+                # re-delivers it on resume. Appending it here AND pausing would then
+                # write it twice -- corrupting (duplicating a 16 KiB block in) any
+                # response larger than HIWAT. Resume only fires once wbuf has drained
+                # to empty, so the replayed chunk is appended exactly once.
+                if (length($self->{wbuf}) >= $HIWAT) { $self->{paused} = 1; return 1 }
                 $self->_write_client($chunk);
                 return 2 if $self->{_write_dead};                # write just failed -> abort
-                if (length($self->{wbuf}) > $HIWAT) { $self->{paused} = 1; return 1 }
                 return 0;
             },
             on_done => sub {

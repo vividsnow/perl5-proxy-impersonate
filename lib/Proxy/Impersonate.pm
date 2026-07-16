@@ -36,10 +36,12 @@ sub new {
         cert    => Proxy::Impersonate::Cert->new(cert_dir => $cert_dir),
         cert_dir=> $cert_dir,
         target  => $target,
-        # Is the impersonate target a Chrome family? Decides whether the per-request
-        # Accept is synthesized to Chrome's value or WebKit's own (Safari-correct)
-        # value is forwarded -- so a Safari target does not present a Chrome Accept.
-        chrome  => (($o{chrome} // ($target =~ /chrome/i)) ? 1 : 0),
+        # Is the impersonate target a Chromium family? Decides whether the per-
+        # request Accept is synthesized to Chrome's value or WebKit's own (Safari-
+        # correct) value is forwarded -- so a Safari target does not present a Chrome
+        # Accept. Chromium engines (Chrome/Edge/Chromium) send the same Accept; a
+        # non-matching Chromium target name can force it with an explicit chrome => .
+        chrome  => (($o{chrome} // ($target =~ /chrome|chromium|edge/i)) ? 1 : 0),
         timeout => $o{timeout} // 30,
         verify  => defined $o{verify} ? $o{verify} : 1,
         follow  => $o{follow_redirects} // 0,

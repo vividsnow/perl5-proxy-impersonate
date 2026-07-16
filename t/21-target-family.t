@@ -12,17 +12,19 @@ my $dir = tempdir(CLEANUP => 1);
 my %WANT = (
     chrome131         => 1,
     chrome131_android => 1,
+    edge131           => 1,   # Edge is Chromium -> Chrome-style Accept
     safari18_0        => 0,
     safari18_0_ios    => 0,
+    firefox133        => 0,   # Gecko -> not the Chrome Accept path
 );
 for my $target (sort keys %WANT) {
     my $p = Proxy::Impersonate->new(impersonate => $target, listen => '127.0.0.1:0', cert_dir => $dir);
     is($p->{chrome}, $WANT{$target}, "target $target -> chrome family = $WANT{$target}");
 }
 
-# an explicit chrome => flag overrides the target heuristic (for a custom target
-# the /chrome/ match would misclassify)
-my $p = Proxy::Impersonate->new(impersonate => 'edge131', listen => '127.0.0.1:0', cert_dir => $dir, chrome => 1);
+# an explicit chrome => flag overrides the target heuristic (for a Chromium target
+# whose name the heuristic would not match)
+my $p = Proxy::Impersonate->new(impersonate => 'brave', listen => '127.0.0.1:0', cert_dir => $dir, chrome => 1);
 is($p->{chrome}, 1, 'explicit chrome => 1 overrides the target-name heuristic');
 
 done_testing;
