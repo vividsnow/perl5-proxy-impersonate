@@ -9,7 +9,14 @@ Revision history for Proxy-Impersonate
       conspicuous gap next to an otherwise-perfect Chrome request.
     - A CONNECT arriving while pre-TLS plaintext is still queued (a prior pipelined
       response to a slow client) defers the TLS handshake until that has flushed, so
-      the 200 is not stranded behind it by the handshake state.
+      the 200 is not stranded behind it by the handshake state. Bytes a client sends
+      during that deferred window (before reading the 200) fast-close the connection
+      rather than being stranded in rbuf (the later set_fd handshake cannot see
+      them), mirroring the coalesced-ClientHello guard.
+    - Weaken $self in the daemon's accept watcher: dropping the proxy reference
+      without stop()/shutdown() no longer leaks it (kept alive, still accepting) via
+      the watcher self-cycle. Documented usage (hold the ref, then stop/shutdown) is
+      unchanged.
     - A CONNECT that coalesces an optimistic ClientHello (TLS bytes in the same
       segment as the CONNECT request, before our 200) is now closed immediately
       instead of stalling until the idle timeout: set_fd binds OpenSSL to the

@@ -56,6 +56,12 @@ sub _touch        { $_[0]{idle}->again if $_[0]{idle} }   # reset the idle timeo
 sub _readable {
     my ($self) = @_;
     $self->_touch;
+    # Bytes arriving during the deferred-TLS window (the 200 is still flushing, so
+    # the tunnel is not up) mean the client sent before reading the 200 -- non-
+    # compliant. Fast-close rather than read them into rbuf, where set_fd's later
+    # handshake could never see them (they would stall to the idle timeout). This
+    # mirrors the coalesced-ClientHello guard on the immediate CONNECT path.
+    return $self->_close if $self->{_tls_pending};
     return $self->_do_handshake if $self->{state} eq 'handshake';
     if ($self->{ssl}) {
         while (1) {

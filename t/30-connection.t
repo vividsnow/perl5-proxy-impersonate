@@ -122,4 +122,23 @@ SKIP: {
     $conn->_close;
 }
 
+# --- bytes arriving DURING the deferred-TLS window (client sent before the tunnel
+#     is up) fast-close instead of stranding them in rbuf (mirrors the coalesced
+#     guard; else set_fd's handshake never sees them -> 120s stall) ---
+{
+    socketpair(my $client, my $srv, AF_UNIX, SOCK_STREAM, PF_UNSPEC) or die "socketpair: $!";
+    fcntl($srv, F_SETFL, (fcntl($srv, F_GETFL, 0) | O_NONBLOCK)) or die "fcntl: $!";
+    my $closed = 0;
+    my $conn = Proxy::Impersonate::Connection->new(
+        fd => $srv, cert => undef, multi => FakeMulti->new,
+        make_handle => sub {}, on_close => sub { $closed = 1 },
+    );
+    $conn->{state} = 'tls';
+    $conn->{_tls_pending} = 1;
+    syswrite($client, "\x16\x03\x01premature ClientHello");   # client sends before reading the 200
+    $conn->_readable;
+    ok($conn->{_dead}, 'bytes during the deferred-TLS window fast-close (not stranded in rbuf)');
+    ok($closed, 'on_close fired for the deferred-window premature-send case');
+}
+
 done_testing;

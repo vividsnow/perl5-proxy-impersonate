@@ -54,7 +54,12 @@ sub new {
     }, $class;
 
     $self->_wire_multi;
-    $self->{aw} = EV::io(fileno($srv), EV::READ, sub { $self->_accept });
+    # weaken $self in the accept watcher: otherwise $self -> {aw} -> closure -> $self
+    # is a cycle that keeps the daemon (and its listen socket) alive -- still
+    # accepting -- after the caller drops its reference without stop()/shutdown().
+    # The documented usage (hold the ref, then stop/shutdown) is unaffected.
+    Scalar::Util::weaken(my $wself = $self);
+    $self->{aw} = EV::io(fileno($srv), EV::READ, sub { $wself && $wself->_accept });
     return $self;
 }
 
