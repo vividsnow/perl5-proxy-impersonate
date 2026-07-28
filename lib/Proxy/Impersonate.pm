@@ -47,6 +47,7 @@ sub new {
         follow  => $o{follow_redirects} // 0,
         override => $o{override_headers} // {},   # forced on every upstream request
         on_request => $o{on_request},             # optional per-request interception hook
+        on_response => $o{on_response},           # optional per-response hook
         high_entropy => $o{high_entropy_headers} // {}, # added per-host after Accept-CH
         hints    => {},                           # host -> { hint-name => 1 } (Accept-CH seen)
         multi   => Curl::Impersonate->multi,
@@ -111,6 +112,7 @@ sub _accept {
             multi => $self->{multi},
             override => $self->{override},
             on_request => $self->{on_request},
+            on_response => $self->{on_response},
             chrome => $self->{chrome},
             high_entropy => $self->{high_entropy},
             hints => $self->{hints},
@@ -299,6 +301,39 @@ you simply cannot read their template values here.
 A handler that B<dies> refuses the request with a 502 and warns. It fails closed
 deliberately: this hook is used to block traffic, so an exception must not
 quietly let through exactly what the caller was trying to stop.
+
+=item on_response => sub { my ($res) = @_; ... }
+
+The counterpart to C<on_request>, called when the upstream response head
+arrives -- before any of it reaches the client, so the status and headers can
+be observed or rewritten. Stripping a policy header is the usual reason:
+
+    on_response => sub {
+        my ($res) = @_;
+        delete $res->{headers}{'content-security-policy'};
+        delete $res->{headers}{'x-frame-options'};
+        return;
+    }
+
+C<$res> has C<status>, C<headers> (lowercase-keyed), and -- for context -- the
+request's C<url>, C<method> and C<host>. Modify C<status> or C<headers> in
+place; the return value is ignored.
+
+B<The framing is not yours.> C<Content-Length>, C<Connection> and the
+hop-by-hop headers are snapshotted before the hook and forced back after it: a
+handler that edits them does not desynchronise its own connection, it
+desynchronises the client's. Setting C<content-length> to a value that
+disagrees with the body, or reintroducing C<transfer-encoding>, therefore has
+no effect.
+
+Bodies are out of scope: they stream through with backpressure, and buffering
+them to offer a rewrite would defeat that. Use C<on_request>'s synthetic
+response if you need to replace content wholesale.
+
+A handler that B<dies> passes the response through unchanged and warns. It
+fails B<open>, unlike C<on_request>: the request has already been made and the
+response already fetched, so there is no security decision left to protect, and
+breaking the page over a bug in an observer would be the worse outcome.
 
 =item timeout => $seconds
 

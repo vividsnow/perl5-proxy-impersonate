@@ -28,6 +28,7 @@ sub new {
         hints       => $o{hints} // {},   # shared: host -> { hint-name => 1 }
         make_handle => $o{make_handle},   # sub { Curl::Impersonate->new(...) }
         on_request  => $o{on_request},   # optional interception hook -- see _forward
+        on_response => $o{on_response},  # optional response hook -- see _forward
         on_close    => $o{on_close} // sub {},
         state       => 'plain',
         rbuf        => '',
@@ -239,6 +240,36 @@ sub _forward {
                 if (!exists $h{'content-length'}) {
                     $h{connection} = 'close';
                     $self->{close_after_flush} = 1;
+                }
+                # Response interception, the counterpart to on_request. Status and
+                # headers may be rewritten -- stripping Content-Security-Policy or
+                # X-Frame-Options is the usual reason -- but the FRAMING is ours,
+                # not the handler's: content-length and the hop-by-hop set are
+                # snapshotted here and forced back afterwards, because a handler
+                # that edits them does not desynchronise its own connection, it
+                # desynchronises the browser's.
+                if (my $cb = $self->{on_response}) {
+                    my $framing_len  = $h{'content-length'};
+                    my $framing_conn = $h{connection};
+                    my $res = { status => $status, headers => \%h,
+                                url => $url, method => $r->{method}, host => $host };
+                    if (eval { $cb->($res); 1 }) {
+                        $status = $res->{status} if defined $res->{status};
+                        %h = %{ $res->{headers} } if ref $res->{headers} eq 'HASH';
+                    }
+                    else {
+                        # Fail OPEN here, unlike on_request. This hook observes a
+                        # response that has already been fetched; refusing it would
+                        # break a page over a bug in an observer, and there is no
+                        # security decision left to fail closed on -- the request
+                        # was already made.
+                        warn "Proxy::Impersonate: on_response died (passing the response through): $@";
+                    }
+                    delete @h{qw(keep-alive transfer-encoding proxy-connection upgrade)};
+                    defined $framing_len  ? ($h{'content-length'} = $framing_len)
+                                          : delete $h{'content-length'};
+                    defined $framing_conn ? ($h{connection} = $framing_conn)
+                                          : delete $h{connection};
                 }
                 $self->_write_client(response_head($status, \%h));
             },

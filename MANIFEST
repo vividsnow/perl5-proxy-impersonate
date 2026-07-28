@@ -12,6 +12,7 @@ t/20-http.t
 t/21-target-family.t
 t/30-connection.t
 t/31-on-request.t
+t/32-on-response.t
 t/40-integration.t
 t/41-verify.t
 t/42-hints.t

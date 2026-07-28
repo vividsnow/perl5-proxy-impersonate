@@ -1,6 +1,17 @@
 Revision history for Proxy-Impersonate
 
 0.04  (unreleased)
+    - new on_response hook: the counterpart to on_request, called when the upstream
+      response head arrives, before any of it reaches the client. Status and headers
+      may be observed or rewritten -- stripping Content-Security-Policy or
+      X-Frame-Options is the usual reason. The FRAMING is not the handler is:
+      Content-Length, Connection and the hop-by-hop set are snapshotted before the
+      hook and forced back after it, because a handler that edits them does not
+      desynchronise its own connection, it desynchronises the client is. Bodies are
+      out of scope (they stream with backpressure). A handler that dies passes the
+      response through and warns -- it fails OPEN, unlike on_request, since the
+      request has already been made and there is no security decision left to
+      protect.
     - Cert: refuse to ADOPT a pre-existing private key that is group- or
       world-accessible, owned by another user, or a symlink. cert_dir defaults to
       a 0700 temporary directory, but the option exists so a caller can persist
