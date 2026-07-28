@@ -18,7 +18,7 @@ jobs:
       - name: deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends build-essential libssl-dev
+          sudo apt-get install -y --no-install-recommends cpanminus build-essential libssl-dev
           # cpanm falls back to ~/perl5 (not in @INC) when it cannot write to the
           # runner's perl, and still exits 0 -- so put it on PERL5LIB or nothing
           # finds what was just installed.
@@ -43,7 +43,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            git ninja-build cmake autoconf automake pkg-config libtool \
+            cpanminus git ninja-build cmake autoconf automake pkg-config libtool \
             ca-certificates curl golang-go bzip2 xz-utils unzip \
             build-essential libssl-dev
       - name: cpan deps (builds libcurl-impersonate from source)
