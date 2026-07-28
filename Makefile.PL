@@ -9,4 +9,8 @@ WriteMakefile(
     MIN_PERL_VERSION => '5.010',
     PREREQ_PM        => { 'EV' => 0, 'Net::SSLeay' => '1.85', 'Curl::Impersonate' => '0.03' },
     TEST_REQUIRES    => { 'Test::More' => 0 },
+    META_MERGE       => {
+        'meta-spec' => { version => 2 },
+        resources   => { repository => { type=>'git', url=>'https://github.com/vividsnow/perl5-proxy-impersonate.git', web=>'https://github.com/vividsnow/perl5-proxy-impersonate' } },
+    },
 );
