@@ -55,8 +55,10 @@ jobs:
           # Neither of these is on CPAN yet; take them from their repositories,
           # Alien first -- Curl::Impersonate cannot even run its Makefile.PL
           # without it.
-          cpanm --notest git+https://github.com/vividsnow/perl5-alien-curlimpersonate.git
-          cpanm --notest git+https://github.com/vividsnow/perl5-curl-impersonate.git
+          git clone --depth 1 https://github.com/vividsnow/perl5-alien-curlimpersonate.git /tmp/alien-ci
+          cpanm --notest /tmp/alien-ci
+          git clone --depth 1 https://github.com/vividsnow/perl5-curl-impersonate.git /tmp/curl-ci
+          cpanm --notest /tmp/curl-ci
           cpanm --notest --installdeps . || true
       - name: test
         run: |
