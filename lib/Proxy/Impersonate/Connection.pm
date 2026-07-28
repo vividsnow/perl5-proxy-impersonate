@@ -395,3 +395,24 @@ sub _close {
 }
 
 1;
+
+__END__
+
+=head1 NAME
+
+Proxy::Impersonate::Connection - one client connection's state machine
+
+=head1 DESCRIPTION
+
+One instance per client connection, created by L<Proxy::Impersonate> on accept.
+Reads a plaintext proxy request or a C<CONNECT>, terminates TLS for the latter
+with L<Proxy::Impersonate::Cert>, then forwards each request upstream through
+the shared L<Curl::Impersonate> multi handle and streams the response back --
+with backpressure, so a slow client cannot make the proxy buffer without bound.
+You do not normally touch it directly.
+
+The C<on_request> hook documented in L<Proxy::Impersonate/new> fires here, in
+C<_forward>: after TLS termination and before anything goes upstream, which is
+the only point where the request exists in plaintext and is still changeable.
+
+=cut

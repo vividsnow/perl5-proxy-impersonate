@@ -56,6 +56,26 @@ sub _load_or_generate {
     my ($self) = @_;
     my ($cf, $kf) = ($self->cert_path, $self->key_path);
     if (-r $cf && -r $kf) {
+        # Adopting a key we did not write is the interesting case: cert_dir is a
+        # 0700 File::Temp dir by default, but the option exists precisely so a
+        # caller can persist the cert somewhere of their choosing -- and a
+        # shared location is where this goes wrong. A key that is group- or
+        # world-accessible, or owned by somebody else, means whoever put it
+        # there can impersonate this proxy to the browser it fronts (which is
+        # configured to accept its certificate). Refuse rather than adopt it.
+        # Symlink-safe: lstat, so a symlink to a 0600 file is judged on the
+        # LINK, and O_NOFOLLOW-equivalent semantics apply to the check.
+        my @st = lstat $kf;
+        if (@st) {
+            my ($mode, $uid) = @st[2, 4];
+            Carp::croak("Cert: refusing to use $kf -- it is a symlink")
+                if -l _;
+            Carp::croak(sprintf 'Cert: refusing to use %s -- mode %04o is accessible '
+                              . 'beyond its owner (want 0600)', $kf, $mode & 07777)
+                if $mode & 077;
+            Carp::croak("Cert: refusing to use $kf -- it is owned by uid $uid, not $<")
+                if $uid != $<;
+        }
         my $bc = Net::SSLeay::BIO_new_file($cf, 'r');
         $self->{cert} = Net::SSLeay::PEM_read_bio_X509($bc);
         Net::SSLeay::BIO_free($bc);
@@ -97,3 +117,22 @@ sub DESTROY {
 }
 
 1;
+
+__END__
+
+=head1 NAME
+
+Proxy::Impersonate::Cert - the self-signed cert the proxy terminates TLS with
+
+=head1 DESCRIPTION
+
+Generates (once) and persists a self-signed CA-ish certificate under the
+proxy's C<cert_dir>, and installs it into an OpenSSL context. Used by
+L<Proxy::Impersonate::Connection>. You do not normally touch it directly.
+
+Because the proxy MITMs the client's TLS, the client must be told to accept
+this certificate -- L<EV::WebKit> does that with
+C<set_tls_errors_policy('ignore')>, which is only reasonable because the
+browser-to-proxy hop is loopback. See L<Proxy::Impersonate/TRUST MODEL>.
+
+=cut

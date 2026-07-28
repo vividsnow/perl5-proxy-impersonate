@@ -29,4 +29,35 @@ is($mode & 077, 0, 'key file is not group/other readable');
 my $ctx = Net::SSLeay::CTX_new();
 ok(eval { $c->apply_to_ctx($ctx); 1 }, 'apply_to_ctx succeeds') or diag($@);
 
+# --- refuse to ADOPT an unsafe pre-existing key ---------------------------
+#
+# cert_dir defaults to a 0700 File::Temp dir, but the option exists so a caller
+# can persist the cert somewhere of their own choosing -- and a shared location
+# is where this goes wrong. Whoever can write that key can impersonate this
+# proxy to the browser it fronts, which is configured to accept its
+# certificate. These pin the refusals rather than trusting the comment.
+{
+    my $d2 = tempdir(CLEANUP => 1);
+    my $c3 = Proxy::Impersonate::Cert->new(cert_dir => $d2);   # generated normally
+    ok(-r $c3->key_path, 'generated a key in a fresh dir');
+
+    chmod 0644, $c3->key_path;
+    my $err = '';
+    eval { Proxy::Impersonate::Cert->new(cert_dir => $d2); 1 } or $err = $@;
+    like($err, qr/accessible beyond its owner/, 'refuses a group/world-readable key');
+
+    chmod 0600, $c3->key_path;
+    ok(eval { Proxy::Impersonate::Cert->new(cert_dir => $d2); 1 },
+       'a 0600 key is adopted normally') or diag($@);
+
+    # judged on the LINK, not its target: a symlink pointing at a 0600 file
+    # would otherwise pass a naive stat()
+    my $real = $c3->key_path . '.real';
+    rename $c3->key_path, $real or die "rename: $!";
+    symlink $real, $c3->key_path or die "symlink: $!";
+    $err = '';
+    eval { Proxy::Impersonate::Cert->new(cert_dir => $d2); 1 } or $err = $@;
+    like($err, qr/is a symlink/, 'refuses a symlinked key');
+}
+
 done_testing;

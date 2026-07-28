@@ -156,3 +156,26 @@ sub response_head {
 }
 
 1;
+
+__END__
+
+=head1 NAME
+
+Proxy::Impersonate::HTTP - request/response head parsing for the proxy
+
+=head1 DESCRIPTION
+
+The small HTTP codec L<Proxy::Impersonate::Connection> runs on: parse a request
+head, work out how the body is delimited, decide which client headers may be
+forwarded on top of the impersonation template, and format a response head.
+Nothing here is exported by default and you do not normally touch it directly.
+
+C<coherent_headers> is the interesting one: it drops the headers
+C<libcurl-impersonate> supplies from its own fingerprint template
+(C<User-Agent>, C<Accept>, C<Accept-Language>, C<Sec-CH-UA>, ...) and keeps only
+what the client sent that must be carried through -- C<Cookie>, C<Referer>,
+C<Sec-Fetch-*> and friends. Forwarding the client's own template headers would
+break the very fingerprint this proxy exists to reproduce, which is also why an
+C<on_request> handler sees the kept set rather than the whole request.
+
+=cut

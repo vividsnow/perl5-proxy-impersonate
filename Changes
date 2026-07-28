@@ -1,6 +1,19 @@
 Revision history for Proxy-Impersonate
 
 0.04  (unreleased)
+    - Cert: refuse to ADOPT a pre-existing private key that is group- or
+      world-accessible, owned by another user, or a symlink. cert_dir defaults to
+      a 0700 temporary directory, but the option exists so a caller can persist
+      the cert somewhere of their own choosing -- and whoever can write that key
+      can impersonate this proxy to the client it fronts, which is configured to
+      accept its certificate. Writing was already careful (0600 via sysopen at
+      the target mode, so there is no open-then-chmod window); only the load path
+      trusted whatever it found. Judged with lstat, so a symlink is refused on
+      the link rather than passing on its target permissions.
+    - doc: document shutdown, which is public API (EV::WebKit calls it on quit)
+      and appeared nowhere in the POD, even though a code comment referred to
+      "the documented usage". Cert/Connection/HTTP gained brief POD saying what
+      they are and that they are internal.
     - new on_request hook: a per-request interception point, called after TLS
       termination and before anything goes upstream, so it sees every request the
       client makes (navigations, subresources, XHR, fetch). The handler may rewrite

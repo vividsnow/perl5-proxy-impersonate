@@ -236,7 +236,14 @@ Bind address; default C<'127.0.0.1:0'> (an ephemeral port, reported by L</port>)
 
 =item cert_dir => $path
 
-Where the self-signed cert is persisted. Defaults to a temporary directory.
+Where the self-signed cert is persisted. Defaults to a temporary directory
+(mode 0700), which is the safe case.
+
+If you point this at a location of your own, note that an B<existing> key there
+is adopted, and whoever can write that key can impersonate this proxy to the
+client it fronts -- which is configured to accept its certificate. So a key
+that is group- or world-accessible, owned by another user, or a symlink is
+B<refused> rather than used. Keep it 0600 and yours.
 
 =item on_request => sub { my ($req) = @_; ... }
 
@@ -322,7 +329,18 @@ Run the EV loop. Blocks until L</stop> or C<EV::break>.
 
 =head2 stop
 
-Stop accepting and break the EV loop.
+Stop accepting and break the EV loop. Use this when the proxy owns the loop --
+i.e. when you called L</run>.
+
+=head2 shutdown
+
+Stop accepting, close every active connection, and release the C<curl_multi>
+wiring -- B<without> breaking the EV loop, so a caller whose loop is shared
+keeps running. That is the difference from L</stop>: this is the in-process
+teardown, and it is what L<EV::WebKit> calls when the browser it fronts quits.
+
+Safe to call more than once, and safe from inside a callback: it is plain
+EV/Perl with no GObject-Introspection dispatch to unwind.
 
 =head1 REQUIREMENTS
 
