@@ -9,7 +9,7 @@ use Curl::Impersonate;
 use Proxy::Impersonate::Cert;
 use Proxy::Impersonate::Connection;
 
-our $VERSION = '0.03';
+our $VERSION = '0.04';
 
 sub new {
     my ($class, %o) = @_;
@@ -46,6 +46,7 @@ sub new {
         verify  => defined $o{verify} ? $o{verify} : 1,
         follow  => $o{follow_redirects} // 0,
         override => $o{override_headers} // {},   # forced on every upstream request
+        on_request => $o{on_request},             # optional per-request interception hook
         high_entropy => $o{high_entropy_headers} // {}, # added per-host after Accept-CH
         hints    => {},                           # host -> { hint-name => 1 } (Accept-CH seen)
         multi   => Curl::Impersonate->multi,
@@ -109,6 +110,7 @@ sub _accept {
             cert  => $self->{cert},
             multi => $self->{multi},
             override => $self->{override},
+            on_request => $self->{on_request},
             chrome => $self->{chrome},
             high_entropy => $self->{high_entropy},
             hints => $self->{hints},
@@ -235,6 +237,61 @@ Bind address; default C<'127.0.0.1:0'> (an ephemeral port, reported by L</port>)
 =item cert_dir => $path
 
 Where the self-signed cert is persisted. Defaults to a temporary directory.
+
+=item on_request => sub { my ($req) = @_; ... }
+
+Per-request interception hook, called after TLS termination and before anything
+goes upstream -- so it sees B<every> request the client makes (navigations,
+subresources, XHR, fetch), and can rewrite, answer or refuse each one.
+
+C<$req> is a hashref with C<method>, C<url>, C<headers> (a lowercase-keyed
+hashref), C<body> and C<host> (the bare hostname). Modify any of them in place
+to rewrite the request:
+
+    on_request => sub {
+        my ($req) = @_;
+        $req->{url} =~ s{^https://cdn\.}{https://local-mirror.};
+        $req->{headers}{'x-trace'} = 'yes';
+        return;                       # proceed with the rewrite
+    }
+
+Return value decides what happens next:
+
+=over 4
+
+=item nothing (or C<undef>)
+
+The request proceeds, carrying whatever rewrites the handler made.
+
+=item a hashref
+
+Answered locally; the network is never touched. Keys: C<status> (default 200),
+C<headers>, C<body>. C<Content-Length> is B<computed from the body>, not taken
+from the handler, so a handler that disagrees with its own body cannot
+desynchronise the connection. Useful for mocking an endpoint, or for blocking
+with a visible answer:
+
+    return { status => 403, body => 'blocked' } if $req->{host} =~ /ads\./;
+
+=item the string C<'abort'>
+
+The connection is closed without any response -- the closest thing to a
+network-level block.
+
+=back
+
+B<What the handler sees in C<headers>> is the set this proxy forces on top of
+L<Curl::Impersonate>'s template: what the client sent that must be carried
+through (C<Cookie>, C<Referer>, C<Sec-Fetch-*>, C<Content-Type>, ...). It does
+B<not> include the headers curl-impersonate supplies from its fingerprint
+template (C<User-Agent>, C<Accept>, C<Accept-Language>, C<Sec-CH-UA>, ...) --
+forwarding the client's own would break the very fingerprint this proxy exists
+to reproduce. Setting any of those keys still works and overrides the template;
+you simply cannot read their template values here.
+
+A handler that B<dies> refuses the request with a 502 and warns. It fails closed
+deliberately: this hook is used to block traffic, so an exception must not
+quietly let through exactly what the caller was trying to stop.
 
 =item timeout => $seconds
 

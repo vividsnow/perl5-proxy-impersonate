@@ -1,5 +1,21 @@
 Revision history for Proxy-Impersonate
 
+0.04  (unreleased)
+    - new on_request hook: a per-request interception point, called after TLS
+      termination and before anything goes upstream, so it sees every request the
+      client makes (navigations, subresources, XHR, fetch). The handler may rewrite
+      method/url/headers/body in place, answer locally by returning a hashref
+      (status/headers/body -- the network is never touched), or return 'abort' to
+      close the connection. Content-Length on a synthetic response is COMPUTED from
+      the body rather than taken from the handler, so a handler disagreeing with its
+      own body cannot desynchronise the connection. A handler that dies refuses the
+      request with a 502 and warns: it fails closed deliberately, since this hook is
+      used to block traffic and an exception must not let through exactly what the
+      caller was trying to stop. Note the headers the handler sees are the ones this
+      proxy forces on top of curl-impersonate's template (Cookie, Referer,
+      Sec-Fetch-*, ...), not the template's own (User-Agent, Accept, ...); setting
+      those keys still overrides the template.
+
 0.03  2026-07-16
     - Chrome navigations now carry Upgrade-Insecure-Requests: 1. Real Chrome sends
       it on every navigation (not user-gesture-gated) but WebKit never emits it, so

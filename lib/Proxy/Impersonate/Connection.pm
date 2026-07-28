@@ -27,6 +27,7 @@ sub new {
         high_entropy => $o{high_entropy} // {},   # high-entropy client hints (Accept-CH-gated)
         hints       => $o{hints} // {},   # shared: host -> { hint-name => 1 }
         make_handle => $o{make_handle},   # sub { Curl::Impersonate->new(...) }
+        on_request  => $o{on_request},   # optional interception hook -- see _forward
         on_close    => $o{on_close} // sub {},
         state       => 'plain',
         rbuf        => '',
@@ -164,6 +165,49 @@ sub _forward {
     if ($host && (my $want = $self->{hints}{$host})) {
         $fwd->{$_} = $self->{high_entropy}{$_}
             for grep { exists $self->{high_entropy}{$_} } keys %$want;
+    }
+    # Interception point. Everything the request will be is now assembled and
+    # still plaintext -- after TLS termination, before anything goes upstream --
+    # so a hook here sees EVERY request the browser makes (navigations,
+    # subresources, XHR, fetch), which no WebKit-side API does, and can rewrite
+    # it, answer it locally, or refuse it.
+    if (my $cb = $self->{on_request}) {
+        my $req = { method => $r->{method}, url => $url, headers => $fwd,
+                    body => $r->{body}, host => $host };
+        my $res = eval { $cb->($req) };
+        if ($@) {
+            # Fail CLOSED, like the sibling on_policy gate in EV::WebKit: this
+            # hook is used to BLOCK requests, so a handler that dies must not
+            # quietly let the request through -- that is precisely the traffic
+            # the caller was trying to stop.
+            warn "Proxy::Impersonate: on_request died (refusing the request): $@";
+            $res = { status => 502, body => 'on_request handler died' };
+        }
+        else {
+            # Honour in-place rewrites of any field.
+            ($url, $fwd) = ($req->{url}, $req->{headers} // {});
+            $r->{method} = $req->{method};
+            $r->{body}   = $req->{body};
+        }
+        if (ref $res eq 'HASH') {
+            # A synthetic response: answer from here and never touch the
+            # network. Content-Length is computed rather than trusted, so a
+            # handler cannot desynchronise the connection by disagreeing with
+            # its own body.
+            my $body = defined $res->{body} ? $res->{body} : '';
+            my %h = %{ $res->{headers} // {} };
+            delete @h{qw(connection keep-alive transfer-encoding content-length)};
+            $h{'content-type'} //= 'text/plain';
+            $h{'content-length'} = length $body;
+            $self->{wrote_headers}     = 1;
+            $self->{response_complete} = 1;
+            $self->_write_client(response_head($res->{status} || 200, \%h) . $body);
+            # Keep-alive is safe here precisely because the length is exact.
+            $self->_reset_for_next;
+            $self->_process;
+            return;
+        }
+        return $self->_close if defined $res && !ref $res && $res eq 'abort';
     }
     my $h   = $self->{make_handle}->();
     $self->{inflight} = $h;
