@@ -32,7 +32,8 @@ jobs:
           # Curl::Impersonate is absent here, so Proxy::Impersonate itself will
           # not load; these files exercise the submodules that do not need it.
           prove -Ilib -b t/10-cert.t t/20-http.t t/30-connection.t \
-                          t/31-on-request.t t/43-ssl-moving-buffer.t
+                          t/31-on-request.t t/32-on-response.t t/33-framing.t \
+                          t/43-ssl-moving-buffer.t
 
   full:
     runs-on: ubuntu-latest
